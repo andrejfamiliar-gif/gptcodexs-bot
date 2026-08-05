@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: telegram-account-shop-bot
+  cancel-in-progress: true
+
 jobs:
   bot:
     runs-on: ubuntu-latest
