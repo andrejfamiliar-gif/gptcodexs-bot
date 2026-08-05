@@ -30,6 +30,8 @@ jobs:
       SUPPORT_USERNAME: "@codexrepIybot"
       SUPPORT_LABEL: "@admingpt"
       SUPPORT_LINK: https://t.me/codexrepIybot
+      OFFER_LINK: https://telegra.ph/GPT-Codex-Shop-Terms-of-Sale-and-Public-Offer-08-05
+      PRIVACY_LINK: https://telegra.ph/GPT-Codex-Shop-Privacy-Policy-08-05
       GPT_PLUS_NW_PRICE_USD: "2"
       GPT_PLUS_FW_PRICE_USD: "4.5"
       PRO_5X_NW_PRICE_USD: "45"

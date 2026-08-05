@@ -33,6 +33,7 @@ from i18n import (
     LANGUAGES,
     action_for_text,
     balance_keyboard,
+    help_keyboard,
     language_keyboard,
     main_keyboard,
     payment_keyboard,
@@ -349,7 +350,15 @@ async def help_command(message: Message) -> None:
         await send_language_prompt(message)
         return
     rt = get_runtime()
-    await message.answer(t(language, "help", support=support_contact(rt.settings)))
+    await message.answer(
+        t(language, "help", support=support_contact(rt.settings)),
+        reply_markup=help_keyboard(
+            language,
+            rt.settings.support_link,
+            rt.settings.offer_link,
+            rt.settings.privacy_link,
+        ),
+    )
 
 
 @router.callback_query(F.data == "topup")
@@ -743,7 +752,15 @@ async def menu_handler(message: Message, bot: Bot) -> None:
         )
         return
     if action == "help":
-        await message.answer(t(language, "help", support=support_contact(rt.settings)))
+        await message.answer(
+            t(language, "help", support=support_contact(rt.settings)),
+            reply_markup=help_keyboard(
+                language,
+                rt.settings.support_link,
+                rt.settings.offer_link,
+                rt.settings.privacy_link,
+            ),
+        )
         return
     if action == "language":
         await message.answer(t(language, "choose_language"), reply_markup=language_keyboard())

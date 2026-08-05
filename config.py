@@ -43,6 +43,8 @@ class Settings:
     support_username: str
     support_label: str
     support_link: str
+    offer_link: str
+    privacy_link: str
     admin_ids: tuple[int, ...]
     payment_poll_seconds: int
     crypto_pay_base_url: str
@@ -161,6 +163,14 @@ def load_settings() -> Settings:
         support_label=getenv("SUPPORT_LABEL", "@admingpt").strip() or "@admingpt",
         support_link=getenv("SUPPORT_LINK", "https://t.me/codexrepIybot").strip()
         or "https://t.me/codexrepIybot",
+        offer_link=getenv(
+            "OFFER_LINK",
+            "https://telegra.ph/GPT-Codex-Shop-Terms-of-Sale-and-Public-Offer-08-05",
+        ).strip(),
+        privacy_link=getenv(
+            "PRIVACY_LINK",
+            "https://telegra.ph/GPT-Codex-Shop-Privacy-Policy-08-05",
+        ).strip(),
         admin_ids=tuple(admin_ids),
         payment_poll_seconds=payment_poll_seconds,
         crypto_pay_base_url=getenv("CRYPTO_PAY_BASE_URL", "https://pay.crypt.bot").rstrip("/"),

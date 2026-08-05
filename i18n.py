@@ -164,9 +164,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "账号GPT Plus/Pro顶级品质\n\n🔗 Приглашайте друзей в бота:\n{link}",
     },
     "help": {
-        "zh": "📖 帮助\n\n1. 选择 GPT Plus NW/FW 或 Pro 5x/20x NW。\n2. 点击支付按钮并在 Crypto Bot 中完成付款。\n3. 等待自动确认。\n4. 如果付款成功但没有收到商品，请联系 {support}。",
-        "en": "📖 Help\n\n1. Choose GPT Plus NW/FW or Pro 5x/20x NW.\n2. Tap Pay and complete the payment in Crypto Bot.\n3. Wait for automatic confirmation.\n4. If you paid but did not receive the item, contact {support}.",
-        "ru": "📖 Помощь\n\n1. Выберите GPT Plus NW/FW или Pro 5x/20x NW.\n2. Нажмите «Оплатить» и завершите оплату в Crypto Bot.\n3. Дождитесь автоматического подтверждения.\n4. Если оплата прошла, но товар не пришёл, напишите {support}.",
+        "zh": "📖 帮助\n\n客服：{support}\n请使用下方按钮查看销售条款和隐私政策。",
+        "en": "📖 Help\n\nSupport: {support}\nUse the buttons below to view the Terms of Sale and Privacy Policy.",
+        "ru": "📖 Помощь\n\nПоддержка: {support}\nИспользуйте кнопки ниже, чтобы открыть оферту и политику конфиденциальности.",
     },
     "payment_error": {
         "zh": "无法创建账单。请稍后再试或联系 {support}。",
@@ -265,6 +265,27 @@ def main_keyboard(language: str) -> ReplyKeyboardMarkup:
         ],
         resize_keyboard=True,
         is_persistent=True,
+    )
+
+
+def help_keyboard(
+    language: str,
+    support_url: str,
+    offer_url: str,
+    privacy_url: str,
+) -> InlineKeyboardMarkup:
+    language = language if language in LANGUAGES else "en"
+    labels = {
+        "zh": {"offer": "📄 销售条款", "privacy": "🔒 隐私政策"},
+        "en": {"offer": "📄 Terms of Sale", "privacy": "🔒 Privacy Policy"},
+        "ru": {"offer": "📄 Оферта", "privacy": "🔒 Политика конфиденциальности"},
+    }[language]
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="@admingpt", url=support_url)],
+            [InlineKeyboardButton(text=labels["offer"], url=offer_url)],
+            [InlineKeyboardButton(text=labels["privacy"], url=privacy_url)],
+        ]
     )
 
 
