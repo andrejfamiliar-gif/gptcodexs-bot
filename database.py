@@ -130,6 +130,31 @@ class Database:
         row = await self._fetchone("SELECT language FROM users WHERE user_id = ?", (user_id,))
         return row["language"] if row is not None else None
 
+    async def get_user(self, user_id: int) -> aiosqlite.Row | None:
+        return await self._fetchone(
+            """
+            SELECT user_id, username, language, balance_cents, referrer_id, created_at, updated_at
+            FROM users
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+
+    async def count_users(self) -> int:
+        row = await self._fetchone("SELECT COUNT(*) AS count FROM users")
+        return int(row["count"]) if row is not None else 0
+
+    async def list_users(self, limit: int, offset: int = 0) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT user_id, username, language, balance_cents, created_at
+            FROM users
+            ORDER BY created_at DESC, user_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+
     async def set_language(self, user_id: int, language: str) -> None:
         async with self.lock:
             await self._conn().execute(

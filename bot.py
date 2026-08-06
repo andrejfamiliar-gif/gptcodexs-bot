@@ -16,7 +16,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from config import (
     Product,
@@ -65,6 +65,7 @@ class Runtime:
 
 
 runtime: Runtime | None = None
+ADMIN_USERS_PAGE_SIZE = 15
 
 
 class TopUpStates(StatesGroup):
@@ -105,6 +106,108 @@ async def selected_language(message: Message) -> str | None:
 
 def is_admin(user_id: int) -> bool:
     return user_id in get_runtime().settings.admin_ids
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
+                InlineKeyboardButton(text="📊 Сводка", callback_data="admin:stats"),
+            ],
+            [InlineKeyboardButton(text="📦 Остатки", callback_data="admin:stock")],
+        ]
+    )
+
+
+def admin_back_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")]]
+    )
+
+
+def admin_users_keyboard(page: int, total: int) -> InlineKeyboardMarkup:
+    buttons: list[InlineKeyboardButton] = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:users:{page - 1}"))
+    if (page + 1) * ADMIN_USERS_PAGE_SIZE < total:
+        buttons.append(InlineKeyboardButton(text="Вперёд ➡️", callback_data=f"admin:users:{page + 1}"))
+    rows = [buttons] if buttons else []
+    rows.append([InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def notify_admins_on_start(bot: Bot, message: Message) -> None:
+    rt = get_runtime()
+    user = message.from_user
+    if user is None or not rt.settings.admin_ids:
+        return
+    username = f"@{html.escape(user.username)}" if user.username else "не указан"
+    notification = (
+        "🟢 Вход в бота\n"
+        f"Пользователь: {username}\n"
+        f"ID: <code>{user.id}</code>\n"
+        f"Имя: {html.escape(user.full_name)}"
+    )
+    for admin_id in rt.settings.admin_ids:
+        if admin_id == user.id:
+            continue
+        try:
+            await bot.send_message(admin_id, notification)
+        except Exception:
+            logger.exception("Could not notify admin %s about user start", admin_id)
+
+
+async def admin_only_callback(callback: CallbackQuery) -> bool:
+    if not is_admin(callback.from_user.id):
+        await callback.answer("Только для администратора", show_alert=True)
+        return False
+    return True
+
+
+async def edit_admin_message(
+    callback: CallbackQuery,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+) -> None:
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=reply_markup)
+
+
+async def admin_users_text(page: int) -> tuple[str, InlineKeyboardMarkup]:
+    rt = get_runtime()
+    total = await rt.db.count_users()
+    rows = await rt.db.list_users(ADMIN_USERS_PAGE_SIZE, page * ADMIN_USERS_PAGE_SIZE)
+    lines = [f"👥 Пользователи: {total}", f"Страница {page + 1}", ""]
+    if not rows:
+        lines.append("Список пока пуст.")
+    else:
+        for index, row in enumerate(rows, start=page * ADMIN_USERS_PAGE_SIZE + 1):
+            username = row["username"]
+            if username:
+                name = f'<a href="tg://user?id={row["user_id"]}">@{html.escape(username)}</a>'
+            else:
+                name = f'<code>{row["user_id"]}</code>'
+            language = row["language"] or "не выбран"
+            created_at = str(row["created_at"]).replace("T", " ")[:19]
+            lines.append(f"{index}. {name} · {language} · {created_at}")
+    return "\n".join(lines), admin_users_keyboard(page, total)
+
+
+async def admin_stats_text() -> str:
+    rt = get_runtime()
+    total_users = await rt.db.count_users()
+    stock = await rt.db.available_stock()
+    stock_total = sum(stock.values())
+    return (
+        "📊 Сводка\n\n"
+        f"Зарегистрировано пользователей: {total_users}\n"
+        f"Товаров в базе: {stock_total}"
+    )
 
 
 def product_for_action(action: str, settings: Settings) -> Product | None:
@@ -276,7 +379,7 @@ async def payment_watcher(bot: Bot) -> None:
 
 
 @router.message(CommandStart())
-async def start_handler(message: Message) -> None:
+async def start_handler(message: Message, bot: Bot) -> None:
     referrer_id: int | None = None
     parts = (message.text or "").split(maxsplit=1)
     if len(parts) == 2 and parts[1].startswith("ref_"):
@@ -285,6 +388,7 @@ async def start_handler(message: Message) -> None:
         except ValueError:
             referrer_id = None
     language = await ensure_message_user(message, referrer_id)
+    await notify_admins_on_start(bot, message)
     if language not in LANGUAGES:
         await send_language_prompt(message)
         return
@@ -307,6 +411,12 @@ async def language_callback(callback: CallbackQuery) -> None:
         except TelegramBadRequest:
             pass
         await callback.message.answer(t(code, "welcome"), reply_markup=main_keyboard(code))
+
+
+@router.message(Command("id"))
+async def id_command(message: Message) -> None:
+    await ensure_message_user(message)
+    await message.answer(f"Ваш Telegram ID: <code>{user_id_from_message(message)}</code>")
 
 
 @router.message(Command("language"))
@@ -650,6 +760,56 @@ async def check_payment_callback(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer(t(language, "payment_expired"), show_alert=True)
     else:
         await callback.answer(t(language, "payment_pending"), show_alert=True)
+
+
+@router.message(Command("admin"))
+async def admin_command(message: Message) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await message.answer(t("en", "admin_only"))
+        return
+    await message.answer("🔐 Админ-панель", reply_markup=admin_panel_keyboard())
+
+
+@router.callback_query(F.data == "admin:home")
+async def admin_home_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await callback.answer()
+    await edit_admin_message(callback, "🔐 Админ-панель", admin_panel_keyboard())
+
+
+@router.callback_query(F.data.startswith("admin:users:"))
+async def admin_users_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    try:
+        page = max(0, int((callback.data or "").rsplit(":", maxsplit=1)[1]))
+    except (IndexError, ValueError):
+        page = 0
+    text, keyboard = await admin_users_text(page)
+    await callback.answer()
+    await edit_admin_message(callback, text, keyboard)
+
+
+@router.callback_query(F.data == "admin:stats")
+async def admin_stats_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await callback.answer()
+    await edit_admin_message(callback, await admin_stats_text(), admin_back_keyboard())
+
+
+@router.callback_query(F.data == "admin:stock")
+async def admin_stock_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    stock = await get_runtime().db.available_stock()
+    if stock:
+        stock_text = "\n".join(f"{key}: {count}" for key, count in sorted(stock.items()))
+    else:
+        stock_text = "Склад пуст."
+    await callback.answer()
+    await edit_admin_message(callback, f"📦 Остатки\n\n{stock_text}", admin_back_keyboard())
 
 
 @router.message(Command("add_good"))
