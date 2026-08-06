@@ -475,13 +475,18 @@ def queue_quantity_keyboard(language: str, product_key: str) -> InlineKeyboardMa
     )
 
 
-def queue_payment_keyboard(language: str, invoice_url: str) -> InlineKeyboardMarkup:
+def queue_payment_keyboard(
+    language: str,
+    invoice_url: str,
+    order_id: int | None = None,
+) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t(language, "pay"), url=invoice_url)],
-        ]
-    )
+    rows = [[InlineKeyboardButton(text=t(language, "pay"), url=invoice_url)]]
+    if order_id is not None:
+        rows.append(
+            [InlineKeyboardButton(text=t(language, "check_payment"), callback_data=f"check:{order_id}")]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def queue_button_keyboard(language: str, product_key: str) -> InlineKeyboardMarkup:
@@ -494,14 +499,32 @@ def queue_button_keyboard(language: str, product_key: str) -> InlineKeyboardMark
     )
 
 
-def payment_keyboard(language: str, invoice_url: str, order_id: int) -> InlineKeyboardMarkup:
+def payment_keyboard(
+    language: str,
+    invoice_url: str,
+    order_id: int,
+    product_key: str | None = None,
+) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=t(language, "pay"), url=invoice_url)],
-            [InlineKeyboardButton(text=t(language, "check_payment"), callback_data=f"check:{order_id}")],
-        ]
-    )
+    rows = [
+        [InlineKeyboardButton(text=t(language, "pay"), url=invoice_url)],
+        [InlineKeyboardButton(text=t(language, "check_payment"), callback_data=f"check:{order_id}")],
+    ]
+    if product_key is not None:
+        buy_many_labels = {
+            "zh": "🛒 购买多个",
+            "en": "🛒 Buy several",
+            "ru": "🛒 Купить несколько",
+        }
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=buy_many_labels[language],
+                    callback_data=f"buy_many:{product_key}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def action_for_text(language: str, message_text: str) -> str | None:

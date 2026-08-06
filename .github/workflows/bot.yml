@@ -16,10 +16,13 @@ concurrency:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    # Leave a short buffer for encryption and cache save before the next
+    # five-hour scheduled run starts.
+    timeout-minutes: 305
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
       CRYPTO_PAY_TOKEN: ${{ secrets.CRYPTO_PAY_TOKEN }}
+      STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
       ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
       TELEGRAM_PROXY: ""
       DB_PATH: shop.sqlite3
@@ -43,13 +46,21 @@ jobs:
       DISPLAY_STOCK_GPT_PLUS_FW: "4"
       DISPLAY_STOCK_PRO_5X_NW: "6"
       DISPLAY_STOCK_PRO_20X_NW: "1"
-      DECREMENT_STOCK_ON_PAYMENT: "false"
+      DECREMENT_STOCK_ON_PAYMENT: "true"
       CNY_PER_USD: "7.20"
       RUB_PER_USD: "80.00"
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Restore persistent database and logs
+        uses: actions/cache/restore@v4
+        with:
+          path: shop-state.enc
+          key: telegram-shop-state-${{ github.run_id }}
+          restore-keys: |
+            telegram-shop-state-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -59,14 +70,28 @@ jobs:
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
 
+      - name: Decrypt persistent database and logs
+        run: python state_archive.py unpack shop-state.enc
+
       - name: Run bot
-        # Leave time for the runner to finish cleanly before the six-hour cap.
+        # Stop before the next five-hour schedule so state can be saved cleanly.
         run: |
           set +e
-          timeout --signal=TERM --kill-after=30s 350m python bot.py
+          timeout --signal=TERM --kill-after=30s 295m python bot.py
           status=$?
           # A planned window end is normal; other exit codes are real failures.
           if [ "$status" -eq 124 ] || [ "$status" -eq 143 ]; then
             exit 0
           fi
           exit "$status"
+
+      - name: Save persistent database and logs
+        if: always()
+        run: python state_archive.py pack shop-state.enc
+
+      - name: Cache encrypted database and logs
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: shop-state.enc
+          key: telegram-shop-state-${{ github.run_id }}

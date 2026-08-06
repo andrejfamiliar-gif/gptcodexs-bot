@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import logging
 import secrets
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -49,9 +51,15 @@ from i18n import (
 )
 
 
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_DIR / "bot.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger("tg-account-shop")
 router = Router()
@@ -69,6 +77,19 @@ ADMIN_USERS_PAGE_SIZE = 15
 
 
 class TopUpStates(StatesGroup):
+    waiting_amount = State()
+
+
+class ProductQuantityStates(StatesGroup):
+    waiting_quantity = State()
+
+
+class AdminStockStates(StatesGroup):
+    waiting_payload = State()
+    waiting_remove_id = State()
+
+
+class AdminBalanceStates(StatesGroup):
     waiting_amount = State()
 
 
@@ -116,6 +137,7 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📊 Сводка", callback_data="admin:stats"),
             ],
             [InlineKeyboardButton(text="📦 Остатки", callback_data="admin:stock")],
+            [InlineKeyboardButton(text="💵 Пополнить баланс", callback_data="admin:balance")],
         ]
     )
 
@@ -124,6 +146,29 @@ def admin_back_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")]]
     )
+
+
+def admin_stock_keyboard() -> InlineKeyboardMarkup:
+    labels = {
+        "gpt_plus_nw": "Plus NW",
+        "gpt_plus_fw": "Plus FW",
+        "pro_5x_nw": "Pro 5x",
+        "pro_20x_nw": "Pro 20x",
+    }
+    rows = [
+        [
+            InlineKeyboardButton(text=f"➕ {label}", callback_data=f"admin:stock:add:{key}"),
+            InlineKeyboardButton(text="➖ Удалить", callback_data="admin:stock:remove"),
+        ]
+        for key, label in labels.items()
+    ]
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:stock")],
+            [InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_users_keyboard(page: int, total: int) -> InlineKeyboardMarkup:
@@ -210,6 +255,28 @@ async def admin_stats_text() -> str:
     )
 
 
+async def admin_stock_text() -> str:
+    rt = get_runtime()
+    stock = await rt.db.available_stock()
+    goods = await rt.db.list_available_goods()
+    ids_by_product: dict[str, list[str]] = {}
+    for row in goods:
+        ids_by_product.setdefault(str(row["product_key"]), []).append(str(row["id"]))
+    labels = {
+        "gpt_plus_nw": "Plus NW",
+        "gpt_plus_fw": "Plus FW",
+        "pro_5x_nw": "Pro 5x",
+        "pro_20x_nw": "Pro 20x",
+    }
+    lines = ["📦 Склад", ""]
+    for key, label in labels.items():
+        ids = ids_by_product.get(key, [])
+        lines.append(f"{label}: {stock.get(key, 0)}")
+        if ids:
+            lines.append(f"ID: {', '.join(ids[:80])}")
+    return "\n".join(lines)
+
+
 def product_for_action(action: str, settings: Settings) -> Product | None:
     return {
         "plus": settings.products.get("gpt_plus_nw"),
@@ -242,6 +309,37 @@ def top_up_price_labels(settings: Settings, language: str) -> dict[int, str]:
     }
 
 
+def quantity_prompt(language: str, product_name: str, available: int) -> str:
+    prompts = {
+        "zh": "请输入购买数量（可用库存：{available}）：\n商品：{product}",
+        "en": "Enter the quantity to buy (available: {available}):\nProduct: {product}",
+        "ru": "Введите количество для покупки (доступно: {available}):\nТовар: {product}",
+    }
+    return prompts.get(language, prompts["en"]).format(
+        available=available,
+        product=html.escape(product_name),
+    )
+
+
+def quantity_error(language: str, available: int) -> str:
+    messages = {
+        "zh": "请输入至少 2 个，且数量不能超过库存（当前可用：{available}）。",
+        "en": "Enter at least 2 and no more than the available stock (currently: {available}).",
+        "ru": "Введите минимум 2 и не больше доступного остатка (сейчас: {available}).",
+    }
+    return messages.get(language, messages["en"]).format(available=available)
+
+
+def quantity_line(language: str, quantity: int) -> str:
+    labels = {"zh": "数量", "en": "Quantity", "ru": "Количество"}
+    return f"{labels.get(language, labels['en'])}: {quantity}"
+
+
+async def available_stock_for_product(product_key: str) -> int:
+    stock = await get_runtime().db.available_stock()
+    return stock.get(product_key, 0)
+
+
 def support_contact(settings: Settings) -> str:
     label = html.escape(settings.support_label or settings.support_username)
     link = html.escape(settings.support_link or settings.support_username, quote=True)
@@ -258,6 +356,8 @@ async def create_payment_for_order(
     amount_cents: int,
     description: str,
     fiat: str = "USD",
+    quantity: int = 1,
+    order_type: str = "product",
 ) -> tuple[int, dict[str, object]]:
     rt = get_runtime()
     order_token = secrets.token_urlsafe(18)
@@ -273,8 +373,37 @@ async def create_payment_for_order(
         amount_cents=amount_cents,
         order_token=order_token,
         invoice_id=invoice["invoice_id"],
+        quantity=quantity,
+        currency=fiat,
+        order_type=order_type,
     )
     return order_id, invoice
+
+
+def formatted_account_payload(raw_payload: str | None) -> str:
+    if not raw_payload:
+        return ""
+    try:
+        parsed = json.loads(raw_payload)
+    except (TypeError, json.JSONDecodeError):
+        parsed = [raw_payload]
+    if not isinstance(parsed, list):
+        parsed = [parsed]
+    payloads = [str(item) for item in parsed if str(item).strip()]
+    blocks: list[str] = []
+    for index, payload in enumerate(payloads, start=1):
+        if ":" in payload:
+            login, password = payload.split(":", maxsplit=1)
+            block = (
+                f"Account {index}:\n"
+                f"Login: {html.escape(login)}\n"
+                f"Password: {html.escape(password)}\n"
+                f"Login + password: {html.escape(payload)}"
+            )
+        else:
+            block = f"Account {index}:\nData: {html.escape(payload)}"
+        blocks.append(block)
+    return "\n\n".join(blocks)
 
 
 async def deliver_pending_orders(bot: Bot) -> None:
@@ -299,13 +428,14 @@ async def deliver_pending_orders(bot: Bot) -> None:
             else:
                 product = rt.settings.products.get(order["product_key"])
                 product_name = product.title.get(language, product.key) if product else order["product_key"]
+                payload = formatted_account_payload(order["delivery_payload"])
                 await bot.send_message(
                     order["user_id"],
                     t(
                         language,
                         "delivery_account",
                         product=html.escape(product_name),
-                        payload=html.escape(order["delivery_payload"] or ""),
+                        payload=payload,
                     ),
                 )
             await rt.db.mark_delivery_sent(order["id"])
@@ -314,12 +444,46 @@ async def deliver_pending_orders(bot: Bot) -> None:
             logger.exception("Could not deliver order %s", order["id"])
 
 
+async def notify_admins_payment(bot: Bot, settlement: dict[str, object]) -> None:
+    rt = get_runtime()
+    if not rt.settings.admin_ids:
+        return
+    user_id = int(settlement["user_id"])
+    user = await rt.db.get_user(user_id)
+    username = f"@{html.escape(user['username'])}" if user and user["username"] else "не указан"
+    product_key = str(settlement["product_key"])
+    if product_key == "balance_topup":
+        product_name = "Пополнение баланса"
+    else:
+        product = rt.settings.products.get(product_key)
+        product_name = product.title.get("ru", product.key) if product else product_key
+    quantity = int(settlement.get("quantity", 1))
+    currency = str(settlement.get("currency", "USD"))
+    amount = format_fiat_price(int(settlement["amount_cents"]), currency)
+    notification = (
+        "💳 Оплата подтверждена\n"
+        f"Заказ: <code>#{settlement['order_id']}</code>\n"
+        f"Пользователь: {username}\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Товар: {html.escape(product_name)}\n"
+        f"Количество: {quantity}\n"
+        f"Сумма: {amount}"
+    )
+    for admin_id in rt.settings.admin_ids:
+        try:
+            await bot.send_message(admin_id, notification)
+        except Exception:
+            logger.exception("Could not notify admin %s about payment", admin_id)
+
+
 async def settle_invoice(bot: Bot, order_id: int) -> dict[str, object] | None:
     rt = get_runtime()
     settlement = await rt.db.settle_paid_order(
         order_id,
         decrement_stock=rt.settings.decrement_stock_on_payment,
     )
+    if settlement is not None:
+        await notify_admins_payment(bot, settlement)
     if settlement is not None and settlement["delivery_status"] == "waiting_stock":
         language = await rt.db.get_language(settlement["user_id"]) or "en"
         await bot.send_message(
@@ -562,28 +726,71 @@ async def custom_topup_amount_handler(message: Message, state: FSMContext) -> No
     await send_topup_invoice(message, user_id_from_message(message), language, amount_cents)
 
 
+@router.message(ProductQuantityStates.waiting_quantity)
+async def product_quantity_handler(message: Message, state: FSMContext) -> None:
+    language = await selected_language(message)
+    if language is None:
+        await state.clear()
+        await send_language_prompt(message)
+        return
+    data = await state.get_data()
+    product_key = str(data.get("product_key", ""))
+    rt = get_runtime()
+    product = rt.settings.products.get(product_key)
+    if product is None:
+        await state.clear()
+        await message.answer(t(language, "generic_error"))
+        return
+    try:
+        quantity = int((message.text or "").strip())
+    except ValueError:
+        quantity = 0
+    available = await available_stock_for_product(product_key)
+    if quantity < 2 or quantity > available:
+        await message.answer(quantity_error(language, available))
+        return
+    await state.clear()
+    await product_message(
+        message,
+        product,
+        language,
+        buyer_id=user_id_from_message(message),
+        quantity=quantity,
+    )
+
+
 async def product_message(
     message: Message,
     product: Product,
     language: str,
     buyer_id: int | None = None,
+    quantity: int = 1,
 ) -> None:
     rt = get_runtime()
-    if rt.settings.stock_display.get(product.key, 0) <= 0:
+    available = await available_stock_for_product(product.key)
+    if available <= 0:
         await message.answer(
             t(language, "product_out_of_stock"),
             reply_markup=queue_button_keyboard(language, product.key),
         )
         return
+    if quantity < 1 or quantity > available:
+        await message.answer(quantity_error(language, available))
+        return
     amount_cents = product_amount(rt.settings, product, language)
+    total_cents = amount_cents * quantity
     fiat = currency_for_language(language)
     try:
         order_id, invoice = await create_payment_for_order(
             user_id=buyer_id or user_id_from_message(message),
             product_key=product.key,
-            amount_cents=amount_cents,
-            description=f"{product.title.get(language, product.key)} - {format_fiat_price(amount_cents, fiat)}",
+            amount_cents=total_cents,
+            description=(
+                f"{product.title.get(language, product.key)} x{quantity} - "
+                f"{format_fiat_price(total_cents, fiat)}"
+            ),
             fiat=fiat,
+            quantity=quantity,
         )
     except Exception:
         logger.exception("Could not create product invoice")
@@ -592,15 +799,23 @@ async def product_message(
             reply_markup=main_keyboard(language),
         )
         return
+    invoice_text = t(
+        language,
+        "product_invoice",
+        product=product.title.get(language, product.key),
+        amount=format_fiat_price(total_cents, fiat),
+        usd_amount=format_fiat_price(total_cents, fiat),
+    )
+    if quantity > 1:
+        invoice_text = f"{invoice_text}\n{quantity_line(language, quantity)}"
     await message.answer(
-        t(
+        invoice_text,
+        reply_markup=payment_keyboard(
             language,
-            "product_invoice",
-            product=product.title.get(language, product.key),
-            amount=format_fiat_price(amount_cents, fiat),
-            usd_amount=format_fiat_price(amount_cents, fiat),
+            str(invoice["bot_invoice_url"]),
+            order_id,
+            product_key=product.key,
         ),
-        reply_markup=payment_keyboard(language, str(invoice["bot_invoice_url"]), order_id),
     )
 
 
@@ -636,6 +851,31 @@ async def queued_product_buy_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     if callback.message is not None:
         await product_message(callback.message, product, language, callback.from_user.id)
+
+
+@router.callback_query(F.data.startswith("buy_many:"))
+async def buy_many_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    product_key = (callback.data or "").split(":", maxsplit=1)[1]
+    product = rt.settings.products.get(product_key)
+    if product is None:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    available = await available_stock_for_product(product_key)
+    if available < 2:
+        await callback.answer(quantity_error(language, available), show_alert=True)
+        return
+    await state.set_state(ProductQuantityStates.waiting_quantity)
+    await state.update_data(product_key=product_key)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            quantity_prompt(language, product.title.get(language, product.key), available)
+        )
 
 
 @router.callback_query(F.data.startswith("queue:"))
@@ -688,11 +928,14 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
     total_cents = product_amount(rt.settings, product, language) * quantity
     product_name = product.title.get(language, product.key)
     try:
-        invoice = await rt.crypto.create_invoice(
+        order_id, invoice = await create_payment_for_order(
+            user_id=callback.from_user.id,
+            product_key=product_key,
             amount_cents=total_cents,
-            payload=f"queue:{secrets.token_urlsafe(18)}",
             description=f"Queue {product_name} x{quantity} - {format_fiat_price(total_cents, fiat)}",
             fiat=fiat,
+            quantity=quantity,
+            order_type="queue",
         )
     except Exception:
         logger.exception("Could not create queue invoice")
@@ -711,7 +954,11 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
                     amount=format_fiat_price(total_cents, fiat),
                     usd_amount=format_fiat_price(total_cents, fiat),
                 ),
-            reply_markup=queue_payment_keyboard(language, str(invoice["bot_invoice_url"])),
+            reply_markup=queue_payment_keyboard(
+                language,
+                str(invoice["bot_invoice_url"]),
+                order_id,
+            ),
         )
 
 
@@ -799,10 +1046,78 @@ async def admin_stats_callback(callback: CallbackQuery) -> None:
     await edit_admin_message(callback, await admin_stats_text(), admin_back_keyboard())
 
 
+@router.callback_query(F.data == "admin:balance")
+async def admin_balance_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await state.set_state(AdminBalanceStates.waiting_amount)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Введите Telegram ID пользователя и сумму в USD через пробел.\n"
+            "Пример: 123456789 10.50\n\n"
+            "Для отмены отправьте /cancel."
+        )
+
+
+@router.message(AdminBalanceStates.waiting_amount)
+async def admin_balance_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await state.clear()
+        await message.answer(t("en", "admin_only"))
+        return
+    raw_text = (message.text or "").strip()
+    if raw_text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Пополнение баланса отменено.")
+        return
+
+    parts = raw_text.split()
+    if len(parts) != 2:
+        await message.answer(
+            "Формат: Telegram ID сумма в USD\n"
+            "Пример: 123456789 10.50\n"
+            "Для отмены: /cancel"
+        )
+        return
+    try:
+        target_user_id = int(parts[0])
+    except ValueError:
+        await message.answer("Telegram ID должен быть числом.")
+        return
+    if target_user_id <= 0:
+        await message.answer("Telegram ID должен быть положительным числом.")
+        return
+    amount_cents = parse_amount_cents(parts[1])
+    if amount_cents is None:
+        await message.answer("Введите положительную сумму в USD, например 10.50.")
+        return
+
+    new_balance_cents = await get_runtime().db.add_balance_cents(target_user_id, amount_cents)
+    if new_balance_cents is None:
+        await message.answer(
+            "Пользователь не найден в базе. Сначала он должен открыть бота через /start."
+        )
+        return
+
+    await state.clear()
+    await message.answer(
+        "Баланс пополнен.\n"
+        f"Пользователь: <code>{target_user_id}</code>\n"
+        f"Зачислено: <b>{format_usd(amount_cents)}</b>\n"
+        f"Новый баланс: <b>{format_usd(new_balance_cents)}</b>\n\n"
+        "Уведомление пользователю не отправлялось.",
+        reply_markup=admin_panel_keyboard(),
+    )
+
+
 @router.callback_query(F.data == "admin:stock")
 async def admin_stock_callback(callback: CallbackQuery) -> None:
     if not await admin_only_callback(callback):
         return
+    await callback.answer()
+    await edit_admin_message(callback, await admin_stock_text(), admin_stock_keyboard())
+    return
     stock = await get_runtime().db.available_stock()
     if stock:
         stock_text = "\n".join(f"{key}: {count}" for key, count in sorted(stock.items()))
@@ -810,6 +1125,93 @@ async def admin_stock_callback(callback: CallbackQuery) -> None:
         stock_text = "Склад пуст."
     await callback.answer()
     await edit_admin_message(callback, f"📦 Остатки\n\n{stock_text}", admin_back_keyboard())
+
+
+@router.callback_query(F.data.startswith("admin:stock:add:"))
+async def admin_stock_add_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await admin_only_callback(callback):
+        return
+    product_key = (callback.data or "").split(":", maxsplit=3)[-1]
+    if product_key not in get_runtime().settings.products:
+        await callback.answer("Неизвестный товар", show_alert=True)
+        return
+    await state.set_state(AdminStockStates.waiting_payload)
+    await state.update_data(product_key=product_key)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Отправь данные аккаунта одним сообщением.\n"
+            "Можно указать несколько строк — каждая строка станет отдельным товаром.\n"
+            "Для отмены отправь /cancel."
+        )
+
+
+@router.callback_query(F.data == "admin:stock:remove")
+async def admin_stock_remove_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await state.set_state(AdminStockStates.waiting_remove_id)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Отправь ID товара из списка склада. Можно указать несколько ID через пробел.\n"
+            "Для отмены отправь /cancel."
+        )
+
+
+@router.message(AdminStockStates.waiting_payload)
+async def admin_stock_payload_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await state.clear()
+        await message.answer(t("en", "admin_only"))
+        return
+    if (message.text or "").strip().lower() == "/cancel":
+        await state.clear()
+        await message.answer("Добавление отменено.")
+        return
+    data = await state.get_data()
+    product_key = str(data.get("product_key", ""))
+    if product_key not in get_runtime().settings.products:
+        await state.clear()
+        await message.answer("Неизвестный товар.")
+        return
+    payloads = [line.strip() for line in (message.text or "").splitlines() if line.strip()]
+    if not payloads or len(payloads) > 100:
+        await message.answer("Отправь от 1 до 100 строк с данными товара.")
+        return
+    ids = [str(await get_runtime().db.add_good(product_key, payload)) for payload in payloads]
+    await state.clear()
+    await message.answer(
+        f"Добавлено товаров: {len(ids)}\nID: {', '.join(ids)}",
+        reply_markup=admin_stock_keyboard(),
+    )
+
+
+@router.message(AdminStockStates.waiting_remove_id)
+async def admin_stock_remove_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await state.clear()
+        await message.answer(t("en", "admin_only"))
+        return
+    if (message.text or "").strip().lower() == "/cancel":
+        await state.clear()
+        await message.answer("Удаление отменено.")
+        return
+    raw_ids = (message.text or "").replace(",", " ").split()
+    try:
+        good_ids = [int(raw_id) for raw_id in raw_ids]
+    except ValueError:
+        await message.answer("Отправь числовые ID товаров через пробел.")
+        return
+    removed = 0
+    for good_id in good_ids:
+        if await get_runtime().db.remove_good(good_id):
+            removed += 1
+    await state.clear()
+    await message.answer(
+        f"Удалено товаров: {removed}",
+        reply_markup=admin_stock_keyboard(),
+    )
 
 
 @router.message(Command("add_good"))
@@ -893,14 +1295,15 @@ async def menu_handler(message: Message, bot: Bot) -> None:
         await message.answer(t(language, "invite", link=html.escape(link)))
         return
     if action == "stock":
+        stock = await rt.db.available_stock()
         await message.answer(
             t(
                 language,
                 "stock",
-                plus_nw=rt.settings.stock_display.get("gpt_plus_nw", 0),
-                plus_fw=rt.settings.stock_display.get("gpt_plus_fw", 0),
-                pro5_nw=rt.settings.stock_display.get("pro_5x_nw", 0),
-                pro20_nw=rt.settings.stock_display.get("pro_20x_nw", 0),
+                plus_nw=stock.get("gpt_plus_nw", 0),
+                plus_fw=stock.get("gpt_plus_fw", 0),
+                pro5_nw=stock.get("pro_5x_nw", 0),
+                pro20_nw=stock.get("pro_20x_nw", 0),
             ),
             reply_markup=main_keyboard(language),
         )

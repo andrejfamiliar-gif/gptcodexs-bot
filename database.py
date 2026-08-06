@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,9 @@ class Database:
                 user_id INTEGER NOT NULL,
                 product_key TEXT NOT NULL,
                 amount_cents INTEGER NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                order_type TEXT NOT NULL DEFAULT 'product',
                 order_token TEXT NOT NULL UNIQUE,
                 invoice_id TEXT UNIQUE,
                 status TEXT NOT NULL DEFAULT 'pending',
@@ -61,6 +65,17 @@ class Database:
                 paid_at TEXT,
                 delivered_at TEXT,
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL,
+                product_id INTEGER NOT NULL,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(order_id, product_id),
+                FOREIGN KEY(order_id) REFERENCES orders(id),
+                FOREIGN KEY(product_id) REFERENCES goods(id)
             );
 
             CREATE TABLE IF NOT EXISTS waitlist (
@@ -75,9 +90,25 @@ class Database:
 
             CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, delivery_status);
             CREATE INDEX IF NOT EXISTS idx_goods_stock ON goods(product_key, status);
+            CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
             CREATE INDEX IF NOT EXISTS idx_waitlist_product ON waitlist(product_key, status);
             """
         )
+        order_columns = {
+            str(row["name"]) for row in await self._fetchall("PRAGMA table_info(orders)")
+        }
+        if "quantity" not in order_columns:
+            await self.connection.execute(
+                "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1"
+            )
+        if "currency" not in order_columns:
+            await self.connection.execute(
+                "ALTER TABLE orders ADD COLUMN currency TEXT NOT NULL DEFAULT 'USD'"
+            )
+        if "order_type" not in order_columns:
+            await self.connection.execute(
+                "ALTER TABLE orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'product'"
+            )
         await self.connection.commit()
 
     async def close(self) -> None:
@@ -167,6 +198,23 @@ class Database:
         row = await self._fetchone("SELECT balance_cents FROM users WHERE user_id = ?", (user_id,))
         return int(row["balance_cents"]) if row is not None else 0
 
+    async def add_balance_cents(self, user_id: int, amount_cents: int) -> int | None:
+        if amount_cents <= 0:
+            raise ValueError("amount_cents must be positive")
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE users
+                SET balance_cents = balance_cents + ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (amount_cents, utc_now(), user_id),
+            )
+            await self._conn().commit()
+            if cursor.rowcount != 1:
+                return None
+            return await self.get_balance_cents(user_id)
+
     async def create_order(
         self,
         user_id: int,
@@ -174,14 +222,32 @@ class Database:
         amount_cents: int,
         order_token: str,
         invoice_id: int | str,
+        quantity: int = 1,
+        currency: str = "USD",
+        order_type: str = "product",
     ) -> int:
+        if quantity < 1:
+            raise ValueError("quantity must be at least 1")
         async with self.lock:
             cursor = await self._conn().execute(
                 """
-                INSERT INTO orders(user_id, product_key, amount_cents, order_token, invoice_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO orders(
+                    user_id, product_key, amount_cents, quantity, currency, order_type,
+                    order_token, invoice_id, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, product_key, amount_cents, order_token, str(invoice_id), utc_now()),
+                (
+                    user_id,
+                    product_key,
+                    amount_cents,
+                    quantity,
+                    currency.upper(),
+                    order_type,
+                    order_token,
+                    str(invoice_id),
+                    utc_now(),
+                ),
             )
             await self._conn().commit()
             return int(cursor.lastrowid)
@@ -201,6 +267,53 @@ class Database:
                 (order_id,),
             )
             await self._conn().commit()
+
+    async def _reserve_goods_for_order(
+        self,
+        connection: aiosqlite.Connection,
+        order: aiosqlite.Row,
+        now: str,
+    ) -> list[str] | None:
+        quantity = max(1, int(order["quantity"] or 1))
+        cursor = await connection.execute(
+            """
+            SELECT id, payload FROM goods
+            WHERE product_key = ? AND status = 'available'
+            ORDER BY id
+            LIMIT ?
+            """,
+            (order["product_key"], quantity),
+        )
+        try:
+            goods = await cursor.fetchall()
+        finally:
+            await cursor.close()
+        if len(goods) < quantity:
+            return None
+
+        payloads: list[str] = []
+        for good in goods:
+            update_cursor = await connection.execute(
+                """
+                UPDATE goods
+                SET status = 'sold', sold_to = ?, order_id = NULL, sold_at = ?
+                WHERE id = ? AND status = 'available'
+                """,
+                (order["user_id"], now, good["id"]),
+            )
+            if update_cursor.rowcount != 1:
+                await update_cursor.close()
+                raise RuntimeError("Could not reserve an available stock item")
+            await update_cursor.close()
+            await connection.execute(
+                """
+                INSERT INTO order_items(order_id, product_id, payload, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (order["id"], good["id"], str(good["payload"]), now),
+            )
+            payloads.append(str(good["payload"]))
+        return payloads
 
     async def settle_paid_order(
         self,
@@ -238,6 +351,8 @@ class Database:
                         "user_id": order["user_id"],
                         "product_key": order["product_key"],
                         "amount_cents": order["amount_cents"],
+                        "quantity": order["quantity"],
+                        "currency": order["currency"],
                         "delivery_status": "pending",
                         "payload": str(order["amount_cents"]),
                     }
@@ -253,19 +368,14 @@ class Database:
                         "user_id": order["user_id"],
                         "product_key": order["product_key"],
                         "amount_cents": order["amount_cents"],
+                        "quantity": order["quantity"],
+                        "currency": order["currency"],
                         "delivery_status": "test_paid",
                         "payload": None,
                     }
 
-                good = await self._fetchone(
-                    """
-                    SELECT id, payload FROM goods
-                    WHERE product_key = ? AND status = 'available'
-                    ORDER BY id LIMIT 1
-                    """,
-                    (order["product_key"],),
-                )
-                if good is None:
+                payloads = await self._reserve_goods_for_order(connection, order, now)
+                if payloads is None:
                     await connection.execute(
                         "UPDATE orders SET delivery_status = 'waiting_stock' WHERE id = ?",
                         (order_id,),
@@ -276,25 +386,18 @@ class Database:
                         "user_id": order["user_id"],
                         "product_key": order["product_key"],
                         "amount_cents": order["amount_cents"],
+                        "quantity": order["quantity"],
+                        "currency": order["currency"],
                         "delivery_status": "waiting_stock",
                         "payload": None,
                     }
-
-                await connection.execute(
-                    """
-                    UPDATE goods
-                    SET status = 'sold', sold_to = ?, order_id = ?, sold_at = ?
-                    WHERE id = ? AND status = 'available'
-                    """,
-                    (order["user_id"], order_id, now, good["id"]),
-                )
                 await connection.execute(
                     """
                     UPDATE orders
-                    SET delivery_status = 'pending', delivery_payload = ?, product_id = ?
+                    SET delivery_status = 'pending', delivery_payload = ?, product_id = NULL
                     WHERE id = ?
                     """,
-                    (good["payload"], good["id"], order_id),
+                    (json.dumps(payloads, ensure_ascii=False), order_id),
                 )
                 await connection.commit()
                 return {
@@ -302,8 +405,10 @@ class Database:
                     "user_id": order["user_id"],
                     "product_key": order["product_key"],
                     "amount_cents": order["amount_cents"],
+                    "quantity": order["quantity"],
+                    "currency": order["currency"],
                     "delivery_status": "pending",
-                    "payload": good["payload"],
+                    "payload": payloads,
                 }
             except Exception:
                 await connection.rollback()
@@ -327,33 +432,18 @@ class Database:
                 if order is None or order["status"] != "paid" or order["delivery_status"] != "waiting_stock":
                     await connection.rollback()
                     return False
-                good = await self._fetchone(
-                    """
-                    SELECT id, payload FROM goods
-                    WHERE product_key = ? AND status = 'available'
-                    ORDER BY id LIMIT 1
-                    """,
-                    (order["product_key"],),
-                )
-                if good is None:
+                now = utc_now()
+                payloads = await self._reserve_goods_for_order(connection, order, now)
+                if payloads is None:
                     await connection.rollback()
                     return False
-                now = utc_now()
-                await connection.execute(
-                    """
-                    UPDATE goods
-                    SET status = 'sold', sold_to = ?, order_id = ?, sold_at = ?
-                    WHERE id = ? AND status = 'available'
-                    """,
-                    (order["user_id"], order_id, now, good["id"]),
-                )
                 await connection.execute(
                     """
                     UPDATE orders
-                    SET delivery_status = 'pending', delivery_payload = ?, product_id = ?
+                    SET delivery_status = 'pending', delivery_payload = ?, product_id = NULL
                     WHERE id = ?
                     """,
-                    (good["payload"], good["id"], order_id),
+                    (json.dumps(payloads, ensure_ascii=False), order_id),
                 )
                 await connection.commit()
                 return True
@@ -410,6 +500,27 @@ class Database:
             )
             await self._conn().commit()
             return int(cursor.lastrowid)
+
+    async def list_available_goods(self, limit: int = 200) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT id, product_key, created_at
+            FROM goods
+            WHERE status = 'available'
+            ORDER BY product_key, id
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+    async def remove_good(self, good_id: int) -> bool:
+        async with self.lock:
+            cursor = await self._conn().execute(
+                "UPDATE goods SET status = 'removed' WHERE id = ? AND status = 'available'",
+                (good_id,),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
 
     async def available_stock(self) -> dict[str, int]:
         rows = await self._fetchall(
