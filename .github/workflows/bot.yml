@@ -31,10 +31,10 @@ jobs:
       SUPPORT_LINK: https://t.me/codexrepIybot
       OFFER_LINK: https://telegra.ph/GPT-Codex-Shop-Terms-of-Sale-and-Public-Offer-08-05
       PRIVACY_LINK: https://telegra.ph/GPT-Codex-Shop-Privacy-Policy-08-05
-      GPT_PLUS_NW_PRICE_USD: "2"
-      GPT_PLUS_FW_PRICE_USD: "4.5"
-      PRO_5X_NW_PRICE_USD: "45"
-      PRO_20X_NW_PRICE_USD: "135"
+      GPT_PLUS_NW_PRICE_USD: "1.63"
+      GPT_PLUS_FW_PRICE_USD: "3.75"
+      PRO_5X_NW_PRICE_USD: "20.63"
+      PRO_20X_NW_PRICE_USD: "41.88"
       GPT_PLUS_NW_PRICE_RUB: "130"
       GPT_PLUS_FW_PRICE_RUB: "300"
       PRO_5X_NW_PRICE_RUB: "1650"

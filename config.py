@@ -114,22 +114,22 @@ def load_settings() -> Settings:
         "gpt_plus_nw": Product(
             key="gpt_plus_nw",
             title={"ru": "ChatGPT Plus NW", "en": "ChatGPT Plus NW", "zh": "ChatGPT Plus NW"},
-            price_cents=to_cents(_decimal_env("GPT_PLUS_NW_PRICE_USD", "2")),
+            price_cents=to_cents(_decimal_env("GPT_PLUS_NW_PRICE_USD", "1.63")),
         ),
         "gpt_plus_fw": Product(
             key="gpt_plus_fw",
             title={"ru": "ChatGPT Plus FW", "en": "ChatGPT Plus FW", "zh": "ChatGPT Plus FW"},
-            price_cents=to_cents(_decimal_env("GPT_PLUS_FW_PRICE_USD", "4.5")),
+            price_cents=to_cents(_decimal_env("GPT_PLUS_FW_PRICE_USD", "3.75")),
         ),
         "pro_5x_nw": Product(
             key="pro_5x_nw",
             title={"ru": "GPT Pro/5x NW", "en": "GPT Pro/5x NW", "zh": "GPT Pro/5x NW"},
-            price_cents=to_cents(_decimal_env("PRO_5X_NW_PRICE_USD", "45")),
+            price_cents=to_cents(_decimal_env("PRO_5X_NW_PRICE_USD", "20.63")),
         ),
         "pro_20x_nw": Product(
             key="pro_20x_nw",
             title={"ru": "GPT Pro/20x NW", "en": "GPT Pro/20x NW", "zh": "GPT Pro/20x NW"},
-            price_cents=to_cents(_decimal_env("PRO_20X_NW_PRICE_USD", "135")),
+            price_cents=to_cents(_decimal_env("PRO_20X_NW_PRICE_USD", "41.88")),
         ),
     }
     regional_prices = {
