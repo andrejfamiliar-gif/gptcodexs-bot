@@ -3,9 +3,8 @@ name: Telegram account shop bot
 on:
   workflow_dispatch:
   schedule:
-    # GitHub-hosted jobs are limited to six hours. The bot exits before that
-    # limit; the next scheduled run starts a fresh polling process.
-    - cron: "0 */6 * * *"
+    # Start a fresh polling process every five hours, before the six-hour cap.
+    - cron: "0 */5 * * *"
 
 permissions:
   contents: read
