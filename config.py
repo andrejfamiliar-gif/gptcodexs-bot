@@ -136,22 +136,22 @@ def load_settings() -> Settings:
         "gpt_plus_nw": {
             "en": products["gpt_plus_nw"].price_cents,
             "zh": _convert_usd_cents(products["gpt_plus_nw"].price_cents, currency_rates["zh"]),
-            "ru": to_cents(_decimal_env("GPT_PLUS_NW_PRICE_RUB", "200")),
+            "ru": to_cents(_decimal_env("GPT_PLUS_NW_PRICE_RUB", "130")),
         },
         "gpt_plus_fw": {
             "en": products["gpt_plus_fw"].price_cents,
             "zh": _convert_usd_cents(products["gpt_plus_fw"].price_cents, currency_rates["zh"]),
-            "ru": to_cents(_decimal_env("GPT_PLUS_FW_PRICE_RUB", "450")),
+            "ru": to_cents(_decimal_env("GPT_PLUS_FW_PRICE_RUB", "300")),
         },
         "pro_5x_nw": {
             "en": products["pro_5x_nw"].price_cents,
             "zh": _convert_usd_cents(products["pro_5x_nw"].price_cents, currency_rates["zh"]),
-            "ru": to_cents(_decimal_env("PRO_5X_NW_PRICE_RUB", "2950")),
+            "ru": to_cents(_decimal_env("PRO_5X_NW_PRICE_RUB", "1650")),
         },
         "pro_20x_nw": {
             "en": products["pro_20x_nw"].price_cents,
             "zh": _convert_usd_cents(products["pro_20x_nw"].price_cents, currency_rates["zh"]),
-            "ru": to_cents(_decimal_env("PRO_20X_NW_PRICE_RUB", "5900")),
+            "ru": to_cents(_decimal_env("PRO_20X_NW_PRICE_RUB", "3350")),
         },
     }
 
