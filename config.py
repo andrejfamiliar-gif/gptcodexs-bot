@@ -99,7 +99,7 @@ def load_settings() -> Settings:
         raise RuntimeError("DISPLAY_STOCK_* values must be integers") from exc
     if any(value < 0 for value in stock_display.values()):
         raise RuntimeError("DISPLAY_STOCK_* values cannot be negative")
-    decrement_stock_on_payment = getenv("DECREMENT_STOCK_ON_PAYMENT", "true").strip().lower() in {
+    decrement_stock_on_payment = getenv("DECREMENT_STOCK_ON_PAYMENT", "false").strip().lower() in {
         "1",
         "true",
         "yes",

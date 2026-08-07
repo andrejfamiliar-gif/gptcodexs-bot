@@ -358,6 +358,7 @@ async def create_payment_for_order(
     fiat: str = "USD",
     quantity: int = 1,
     order_type: str = "product",
+    balance_amount_cents: int | None = None,
 ) -> tuple[int, dict[str, object]]:
     rt = get_runtime()
     order_token = secrets.token_urlsafe(18)
@@ -376,6 +377,7 @@ async def create_payment_for_order(
         quantity=quantity,
         currency=fiat,
         order_type=order_type,
+        balance_amount_cents=balance_amount_cents,
     )
     return order_id, invoice
 
@@ -530,10 +532,12 @@ async def payment_watcher(bot: Bot) -> None:
                 except Exception:
                     logger.exception("Could not refresh invoice for order %s", order["id"])
 
-            if rt.settings.decrement_stock_on_payment:
-                for order in await rt.db.get_waiting_stock_orders():
-                    if await rt.db.try_fulfill_waiting_order(order["id"]):
-                        logger.info("Stock restored; order %s is ready for delivery", order["id"])
+            for order in await rt.db.get_waiting_stock_orders():
+                if await rt.db.try_fulfill_waiting_order(
+                    order["id"],
+                    decrement_stock=rt.settings.decrement_stock_on_payment,
+                ):
+                    logger.info("Stock restored; order %s is ready for delivery", order["id"])
             await deliver_pending_orders(bot)
         except asyncio.CancelledError:
             raise
@@ -767,6 +771,7 @@ async def product_message(
     quantity: int = 1,
 ) -> None:
     rt = get_runtime()
+    buyer_id = buyer_id or user_id_from_message(message)
     available = await available_stock_for_product(product.key)
     if available <= 0:
         await message.answer(
@@ -779,10 +784,12 @@ async def product_message(
         return
     amount_cents = product_amount(rt.settings, product, language)
     total_cents = amount_cents * quantity
+    balance_amount_cents = product.price_cents * quantity
     fiat = currency_for_language(language)
+    balance_cents = await rt.db.get_balance_cents(buyer_id)
     try:
         order_id, invoice = await create_payment_for_order(
-            user_id=buyer_id or user_id_from_message(message),
+            user_id=buyer_id,
             product_key=product.key,
             amount_cents=total_cents,
             description=(
@@ -791,6 +798,7 @@ async def product_message(
             ),
             fiat=fiat,
             quantity=quantity,
+            balance_amount_cents=balance_amount_cents,
         )
     except Exception:
         logger.exception("Could not create product invoice")
@@ -815,6 +823,7 @@ async def product_message(
             str(invoice["bot_invoice_url"]),
             order_id,
             product_key=product.key,
+            show_balance_payment=balance_cents >= balance_amount_cents,
         ),
     )
 
@@ -926,6 +935,8 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     fiat = currency_for_language(language)
     total_cents = product_amount(rt.settings, product, language) * quantity
+    balance_amount_cents = product.price_cents * quantity
+    balance_cents = await rt.db.get_balance_cents(callback.from_user.id)
     product_name = product.title.get(language, product.key)
     try:
         order_id, invoice = await create_payment_for_order(
@@ -936,6 +947,7 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
             fiat=fiat,
             quantity=quantity,
             order_type="queue",
+            balance_amount_cents=balance_amount_cents,
         )
     except Exception:
         logger.exception("Could not create queue invoice")
@@ -958,8 +970,58 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
                 language,
                 str(invoice["bot_invoice_url"]),
                 order_id,
+                show_balance_payment=balance_cents >= balance_amount_cents,
             ),
         )
+
+
+@router.callback_query(F.data.startswith("balance_pay:"))
+async def balance_payment_callback(callback: CallbackQuery, bot: Bot) -> None:
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        order_id = int((callback.data or "").split(":", maxsplit=1)[1])
+    except (IndexError, ValueError):
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+
+    order = await rt.db.get_order(order_id)
+    if order is None or int(order["user_id"]) != callback.from_user.id:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    if order["status"] == "paid":
+        await deliver_pending_orders(bot)
+        await callback.answer(t(language, "payment_confirmed"))
+        return
+    if order["status"] != "pending":
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+
+    settlement = await rt.db.pay_order_with_balance(
+        order_id,
+        callback.from_user.id,
+        decrement_stock=rt.settings.decrement_stock_on_payment,
+    )
+    if settlement is None:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    if settlement.get("status") == "insufficient":
+        await callback.answer(t(language, "balance_insufficient"), show_alert=True)
+        return
+
+    await notify_admins_payment(bot, settlement)
+    if settlement["delivery_status"] == "waiting_stock":
+        await bot.send_message(
+            callback.from_user.id,
+            t(language, "no_stock_after_payment", support=support_contact(rt.settings)),
+        )
+    await deliver_pending_orders(bot)
+    await callback.answer(
+        t(language, "payment_confirmed"),
+    )
 
 
 @router.callback_query(F.data.startswith("check:"))

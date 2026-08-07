@@ -52,6 +52,7 @@ class Database:
                 user_id INTEGER NOT NULL,
                 product_key TEXT NOT NULL,
                 amount_cents INTEGER NOT NULL,
+                balance_amount_cents INTEGER,
                 quantity INTEGER NOT NULL DEFAULT 1,
                 currency TEXT NOT NULL DEFAULT 'USD',
                 order_type TEXT NOT NULL DEFAULT 'product',
@@ -100,6 +101,10 @@ class Database:
         if "quantity" not in order_columns:
             await self.connection.execute(
                 "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1"
+            )
+        if "balance_amount_cents" not in order_columns:
+            await self.connection.execute(
+                "ALTER TABLE orders ADD COLUMN balance_amount_cents INTEGER"
             )
         if "currency" not in order_columns:
             await self.connection.execute(
@@ -225,22 +230,27 @@ class Database:
         quantity: int = 1,
         currency: str = "USD",
         order_type: str = "product",
+        balance_amount_cents: int | None = None,
     ) -> int:
         if quantity < 1:
             raise ValueError("quantity must be at least 1")
+        if balance_amount_cents is not None and balance_amount_cents < 0:
+            raise ValueError("balance_amount_cents cannot be negative")
         async with self.lock:
             cursor = await self._conn().execute(
                 """
                 INSERT INTO orders(
-                    user_id, product_key, amount_cents, quantity, currency, order_type,
+                    user_id, product_key, amount_cents, balance_amount_cents,
+                    quantity, currency, order_type,
                     order_token, invoice_id, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
                     product_key,
                     amount_cents,
+                    balance_amount_cents,
                     quantity,
                     currency.upper(),
                     order_type,
@@ -268,12 +278,11 @@ class Database:
             )
             await self._conn().commit()
 
-    async def _reserve_goods_for_order(
+    async def _available_goods_for_order(
         self,
         connection: aiosqlite.Connection,
         order: aiosqlite.Row,
-        now: str,
-    ) -> list[str] | None:
+    ) -> list[aiosqlite.Row] | None:
         quantity = max(1, int(order["quantity"] or 1))
         cursor = await connection.execute(
             """
@@ -289,6 +298,17 @@ class Database:
         finally:
             await cursor.close()
         if len(goods) < quantity:
+            return None
+        return goods
+
+    async def _reserve_goods_for_order(
+        self,
+        connection: aiosqlite.Connection,
+        order: aiosqlite.Row,
+        now: str,
+    ) -> list[str] | None:
+        goods = await self._available_goods_for_order(connection, order)
+        if goods is None:
             return None
 
         payloads: list[str] = []
@@ -315,12 +335,26 @@ class Database:
             payloads.append(str(good["payload"]))
         return payloads
 
+    async def _delivery_payloads_for_order(
+        self,
+        connection: aiosqlite.Connection,
+        order: aiosqlite.Row,
+        now: str,
+        decrement_stock: bool,
+    ) -> list[str] | None:
+        if decrement_stock:
+            return await self._reserve_goods_for_order(connection, order, now)
+        goods = await self._available_goods_for_order(connection, order)
+        if goods is None:
+            return None
+        return [str(good["payload"]) for good in goods]
+
     async def settle_paid_order(
         self,
         order_id: int,
         decrement_stock: bool = True,
     ) -> dict[str, Any] | None:
-        """Mark a paid invoice once and optionally reserve one item atomically."""
+        """Mark a paid invoice once and optionally reserve its items atomically."""
         async with self.lock:
             connection = self._conn()
             await connection.execute("BEGIN IMMEDIATE")
@@ -357,24 +391,12 @@ class Database:
                         "payload": str(order["amount_cents"]),
                     }
 
-                if not decrement_stock:
-                    await connection.execute(
-                        "UPDATE orders SET delivery_status = 'test_paid' WHERE id = ?",
-                        (order_id,),
-                    )
-                    await connection.commit()
-                    return {
-                        "order_id": order_id,
-                        "user_id": order["user_id"],
-                        "product_key": order["product_key"],
-                        "amount_cents": order["amount_cents"],
-                        "quantity": order["quantity"],
-                        "currency": order["currency"],
-                        "delivery_status": "test_paid",
-                        "payload": None,
-                    }
-
-                payloads = await self._reserve_goods_for_order(connection, order, now)
+                payloads = await self._delivery_payloads_for_order(
+                    connection,
+                    order,
+                    now,
+                    decrement_stock,
+                )
                 if payloads is None:
                     await connection.execute(
                         "UPDATE orders SET delivery_status = 'waiting_stock' WHERE id = ?",
@@ -414,6 +436,106 @@ class Database:
                 await connection.rollback()
                 raise
 
+    async def pay_order_with_balance(
+        self,
+        order_id: int,
+        user_id: int,
+        decrement_stock: bool = True,
+    ) -> dict[str, Any] | None:
+        """Pay a pending product/queue order atomically from the buyer's balance."""
+        async with self.lock:
+            connection = self._conn()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                order = await self._fetchone("SELECT * FROM orders WHERE id = ?", (order_id,))
+                if (
+                    order is None
+                    or order["status"] != "pending"
+                    or int(order["user_id"]) != user_id
+                    or order["product_key"] == "balance_topup"
+                ):
+                    await connection.rollback()
+                    return None
+
+                required_cents = int(order["balance_amount_cents"] or 0)
+                if required_cents <= 0 and str(order["currency"]).upper() == "USD":
+                    required_cents = int(order["amount_cents"])
+                if required_cents <= 0:
+                    await connection.rollback()
+                    return None
+
+                now = utc_now()
+                cursor = await connection.execute(
+                    """
+                    UPDATE users
+                    SET balance_cents = balance_cents - ?, updated_at = ?
+                    WHERE user_id = ? AND balance_cents >= ?
+                    """,
+                    (required_cents, now, user_id, required_cents),
+                )
+                updated = cursor.rowcount
+                await cursor.close()
+                if updated != 1:
+                    await connection.rollback()
+                    return {
+                        "status": "insufficient",
+                        "order_id": order_id,
+                        "user_id": user_id,
+                        "required_cents": required_cents,
+                    }
+
+                await connection.execute(
+                    "UPDATE orders SET status = 'paid', paid_at = ? WHERE id = ?",
+                    (now, order_id),
+                )
+                payloads = await self._delivery_payloads_for_order(
+                    connection,
+                    order,
+                    now,
+                    decrement_stock,
+                )
+                if payloads is None:
+                    await connection.execute(
+                        "UPDATE orders SET delivery_status = 'waiting_stock' WHERE id = ?",
+                        (order_id,),
+                    )
+                    await connection.commit()
+                    return {
+                        "order_id": order_id,
+                        "user_id": order["user_id"],
+                        "product_key": order["product_key"],
+                        "amount_cents": order["amount_cents"],
+                        "quantity": order["quantity"],
+                        "currency": order["currency"],
+                        "delivery_status": "waiting_stock",
+                        "payload": None,
+                        "payment_method": "balance",
+                    }
+
+                await connection.execute(
+                    """
+                    UPDATE orders
+                    SET delivery_status = 'pending', delivery_payload = ?, product_id = NULL
+                    WHERE id = ?
+                    """,
+                    (json.dumps(payloads, ensure_ascii=False), order_id),
+                )
+                await connection.commit()
+                return {
+                    "order_id": order_id,
+                    "user_id": order["user_id"],
+                    "product_key": order["product_key"],
+                    "amount_cents": order["amount_cents"],
+                    "quantity": order["quantity"],
+                    "currency": order["currency"],
+                    "delivery_status": "pending",
+                    "payload": payloads,
+                    "payment_method": "balance",
+                }
+            except Exception:
+                await connection.rollback()
+                raise
+
     async def get_waiting_stock_orders(self) -> list[aiosqlite.Row]:
         return await self._fetchall(
             """
@@ -423,7 +545,7 @@ class Database:
             """
         )
 
-    async def try_fulfill_waiting_order(self, order_id: int) -> bool:
+    async def try_fulfill_waiting_order(self, order_id: int, decrement_stock: bool = True) -> bool:
         async with self.lock:
             connection = self._conn()
             await connection.execute("BEGIN IMMEDIATE")
@@ -433,7 +555,12 @@ class Database:
                     await connection.rollback()
                     return False
                 now = utc_now()
-                payloads = await self._reserve_goods_for_order(connection, order, now)
+                payloads = await self._delivery_payloads_for_order(
+                    connection,
+                    order,
+                    now,
+                    decrement_stock,
+                )
                 if payloads is None:
                     await connection.rollback()
                     return False

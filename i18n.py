@@ -78,6 +78,16 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "💳 Pay",
         "ru": "💳 Оплатить",
     },
+    "pay_balance": {
+        "zh": "💰 使用余额支付",
+        "en": "💰 Pay with balance",
+        "ru": "💰 Оплатить с баланса",
+    },
+    "balance_insufficient": {
+        "zh": "余额不足，请先充值。",
+        "en": "Insufficient balance. Please top up first.",
+        "ru": "Недостаточно средств на балансе. Сначала пополните его.",
+    },
     "check_payment": {
         "zh": "🔄 Проверить оплату",
         "en": "🔄 Check payment",
@@ -479,10 +489,20 @@ def queue_payment_keyboard(
     language: str,
     invoice_url: str,
     order_id: int | None = None,
+    show_balance_payment: bool = False,
 ) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
     rows = [[InlineKeyboardButton(text=t(language, "pay"), url=invoice_url)]]
     if order_id is not None:
+        if show_balance_payment:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text=t(language, "pay_balance"),
+                        callback_data=f"balance_pay:{order_id}",
+                    )
+                ]
+            )
         rows.append(
             [InlineKeyboardButton(text=t(language, "check_payment"), callback_data=f"check:{order_id}")]
         )
@@ -504,12 +524,24 @@ def payment_keyboard(
     invoice_url: str,
     order_id: int,
     product_key: str | None = None,
+    show_balance_payment: bool = False,
 ) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
     rows = [
         [InlineKeyboardButton(text=t(language, "pay"), url=invoice_url)],
-        [InlineKeyboardButton(text=t(language, "check_payment"), callback_data=f"check:{order_id}")],
     ]
+    if show_balance_payment:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=t(language, "pay_balance"),
+                    callback_data=f"balance_pay:{order_id}",
+                )
+            ]
+        )
+    rows.append(
+        [InlineKeyboardButton(text=t(language, "check_payment"), callback_data=f"check:{order_id}")]
+    )
     if product_key is not None:
         buy_many_labels = {
             "zh": "🛒 购买多个",
