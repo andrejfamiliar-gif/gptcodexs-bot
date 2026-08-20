@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,23 @@ class Database:
                 username TEXT,
                 language TEXT,
                 balance_cents INTEGER NOT NULL DEFAULT 0,
+                purchase_notifications INTEGER NOT NULL DEFAULT 1,
                 referrer_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS products (
+                product_key TEXT PRIMARY KEY,
+                category TEXT NOT NULL DEFAULT 'catalog',
+                title_ru TEXT NOT NULL,
+                title_en TEXT NOT NULL,
+                title_zh TEXT NOT NULL,
+                price_usd_cents INTEGER NOT NULL,
+                price_rub_cents INTEGER NOT NULL,
+                price_cny_cents INTEGER NOT NULL,
+                display_stock INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -89,15 +105,50 @@ class Database:
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
 
+            -- Crypto transfers made straight to one of our wallet addresses,
+            -- outside Crypto Pay. Nothing here is credited automatically: a row
+            -- stays 'pending' until an admin checks the tx hash on an explorer
+            -- and confirms it, which is what moves it to 'confirmed'.
+            CREATE TABLE IF NOT EXISTS manual_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                asset TEXT NOT NULL,
+                network TEXT NOT NULL,
+                address TEXT NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'USD',
+                crypto_amount TEXT,
+                rate TEXT,
+                rate_at TEXT,
+                tx_hash TEXT,
+                status TEXT NOT NULL DEFAULT 'awaiting_hash',
+                created_at TEXT NOT NULL,
+                submitted_at TEXT,
+                decided_at TEXT,
+                decided_by INTEGER,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, delivery_status);
             CREATE INDEX IF NOT EXISTS idx_goods_stock ON goods(product_key, status);
             CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
             CREATE INDEX IF NOT EXISTS idx_waitlist_product ON waitlist(product_key, status);
+            CREATE INDEX IF NOT EXISTS idx_manual_payments_status
+                ON manual_payments(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_manual_payments_user
+                ON manual_payments(user_id, status);
             """
         )
         order_columns = {
             str(row["name"]) for row in await self._fetchall("PRAGMA table_info(orders)")
         }
+        user_columns = {
+            str(row["name"]) for row in await self._fetchall("PRAGMA table_info(users)")
+        }
+        if "purchase_notifications" not in user_columns:
+            await self.connection.execute(
+                "ALTER TABLE users ADD COLUMN purchase_notifications INTEGER NOT NULL DEFAULT 1"
+            )
         if "quantity" not in order_columns:
             await self.connection.execute(
                 "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1"
@@ -140,6 +191,194 @@ class Database:
         finally:
             await cursor.close()
 
+    async def ensure_product_catalog(
+        self,
+        products: dict[str, Any],
+        regional_prices: dict[str, dict[str, int]],
+        stock_defaults: dict[str, int] | None = None,
+    ) -> None:
+        """Seed built-in products without overwriting admin-managed values."""
+        stock_defaults = stock_defaults or {}
+        async with self.lock:
+            for key, product in products.items():
+                prices = regional_prices.get(key, {})
+                await self._conn().execute(
+                    """
+                    INSERT OR IGNORE INTO products(
+                        product_key, category, title_ru, title_en, title_zh,
+                        price_usd_cents, price_rub_cents, price_cny_cents,
+                        display_stock, enabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        key,
+                        getattr(product, "category", "catalog"),
+                        product.title.get("ru", key),
+                        product.title.get("en", key),
+                        product.title.get("zh", key),
+                        int(prices.get("en", product.price_cents)),
+                        int(prices.get("ru", product.price_cents)),
+                        int(prices.get("zh", product.price_cents)),
+                        max(0, int(stock_defaults.get(key, 0))),
+                        utc_now(),
+                        utc_now(),
+                    ),
+                )
+            await self._conn().commit()
+
+    async def list_products(self, enabled_only: bool = True) -> list[aiosqlite.Row]:
+        where = "WHERE enabled = 1" if enabled_only else ""
+        return await self._fetchall(
+            f"""
+            SELECT product_key, category, title_ru, title_en, title_zh,
+                   price_usd_cents, price_rub_cents, price_cny_cents,
+                   display_stock, enabled, created_at, updated_at
+            FROM products
+            {where}
+            ORDER BY created_at, product_key
+            """
+        )
+
+    async def create_product(
+        self,
+        product_key: str,
+        category: str,
+        title_ru: str,
+        title_en: str,
+        title_zh: str,
+        price_usd_cents: int,
+        price_rub_cents: int,
+        price_cny_cents: int,
+    ) -> bool:
+        if min(price_usd_cents, price_rub_cents, price_cny_cents) <= 0:
+            raise ValueError("product prices must be positive")
+        now = utc_now()
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                INSERT OR IGNORE INTO products(
+                    product_key, category, title_ru, title_en, title_zh,
+                    price_usd_cents, price_rub_cents, price_cny_cents,
+                    display_stock, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+                """,
+                (
+                    product_key,
+                    category,
+                    title_ru,
+                    title_en,
+                    title_zh,
+                    price_usd_cents,
+                    price_rub_cents,
+                    price_cny_cents,
+                    now,
+                    now,
+                ),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def update_product_prices(
+        self,
+        product_key: str,
+        price_usd_cents: int,
+        price_rub_cents: int,
+        price_cny_cents: int,
+    ) -> bool:
+        if min(price_usd_cents, price_rub_cents, price_cny_cents) <= 0:
+            raise ValueError("product prices must be positive")
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE products
+                SET price_usd_cents = ?, price_rub_cents = ?, price_cny_cents = ?, updated_at = ?
+                WHERE product_key = ? AND enabled = 1
+                """,
+                (price_usd_cents, price_rub_cents, price_cny_cents, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def adjust_display_stock(self, product_key: str, delta: int) -> tuple[int, int] | None:
+        async with self.lock:
+            row = await self._fetchone(
+                "SELECT display_stock FROM products WHERE product_key = ? AND enabled = 1",
+                (product_key,),
+            )
+            if row is None:
+                return None
+            old_value = max(0, int(row["display_stock"]))
+            new_value = max(0, old_value + delta)
+            await self._conn().execute(
+                "UPDATE products SET display_stock = ?, updated_at = ? WHERE product_key = ?",
+                (new_value, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return old_value, new_value
+
+    async def set_display_stock(self, product_key: str, value: int) -> tuple[int, int] | None:
+        if value < 0:
+            raise ValueError("display stock cannot be negative")
+        async with self.lock:
+            row = await self._fetchone(
+                "SELECT display_stock FROM products WHERE product_key = ? AND enabled = 1",
+                (product_key,),
+            )
+            if row is None:
+                return None
+            old_value = max(0, int(row["display_stock"]))
+            await self._conn().execute(
+                "UPDATE products SET display_stock = ?, updated_at = ? WHERE product_key = ?",
+                (value, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return old_value, value
+
+    async def find_user_by_username(self, username: str) -> aiosqlite.Row | None:
+        normalized = username.strip().lstrip("@").lower()
+        if not normalized:
+            return None
+        return await self._fetchone(
+            """
+            SELECT user_id, username, language, balance_cents, purchase_notifications,
+                   referrer_id, created_at, updated_at
+            FROM users
+            WHERE LOWER(REPLACE(COALESCE(username, ''), '@', '')) = ?
+            LIMIT 1
+            """,
+            (normalized,),
+        )
+
+    async def list_purchase_notification_users(self) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT user_id, username, language
+            FROM users
+            WHERE purchase_notifications = 1
+            ORDER BY user_id
+            """
+        )
+
+    async def list_users_for_broadcast(self) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            "SELECT user_id, language FROM users ORDER BY user_id"
+        )
+
+    async def get_purchase_notifications(self, user_id: int) -> bool:
+        row = await self._fetchone(
+            "SELECT purchase_notifications FROM users WHERE user_id = ?",
+            (user_id,),
+        )
+        return bool(row["purchase_notifications"]) if row is not None else True
+
+    async def set_purchase_notifications(self, user_id: int, enabled: bool) -> None:
+        async with self.lock:
+            await self._conn().execute(
+                "UPDATE users SET purchase_notifications = ?, updated_at = ? WHERE user_id = ?",
+                (1 if enabled else 0, utc_now(), user_id),
+            )
+            await self._conn().commit()
+
     async def ensure_user(self, user_id: int, username: str | None, referrer_id: int | None = None) -> str | None:
         async with self.lock:
             row = await self._fetchone("SELECT language FROM users WHERE user_id = ?", (user_id,))
@@ -169,7 +408,8 @@ class Database:
     async def get_user(self, user_id: int) -> aiosqlite.Row | None:
         return await self._fetchone(
             """
-            SELECT user_id, username, language, balance_cents, referrer_id, created_at, updated_at
+            SELECT user_id, username, language, balance_cents, purchase_notifications,
+                   referrer_id, created_at, updated_at
             FROM users
             WHERE user_id = ?
             """,
@@ -183,7 +423,7 @@ class Database:
     async def list_users(self, limit: int, offset: int = 0) -> list[aiosqlite.Row]:
         return await self._fetchall(
             """
-            SELECT user_id, username, language, balance_cents, created_at
+            SELECT user_id, username, language, balance_cents, purchase_notifications, created_at
             FROM users
             ORDER BY created_at DESC, user_id DESC
             LIMIT ? OFFSET ?
@@ -651,9 +891,38 @@ class Database:
 
     async def available_stock(self) -> dict[str, int]:
         rows = await self._fetchall(
-            "SELECT product_key, COUNT(*) AS count FROM goods WHERE status = 'available' GROUP BY product_key"
+            """
+            SELECT p.product_key,
+                   p.display_stock,
+                   COUNT(g.id) AS real_stock
+            FROM products p
+            LEFT JOIN goods g
+              ON g.product_key = p.product_key AND g.status = 'available'
+            WHERE p.enabled = 1
+            GROUP BY p.product_key, p.display_stock
+            """
+        )
+        return {
+            str(row["product_key"]): max(int(row["display_stock"]), int(row["real_stock"]))
+            for row in rows
+        }
+
+    async def actual_stock(self) -> dict[str, int]:
+        rows = await self._fetchall(
+            """
+            SELECT product_key, COUNT(*) AS count
+            FROM goods
+            WHERE status = 'available'
+            GROUP BY product_key
+            """
         )
         return {str(row["product_key"]): int(row["count"]) for row in rows}
+
+    async def display_stock(self) -> dict[str, int]:
+        rows = await self._fetchall(
+            "SELECT product_key, display_stock FROM products WHERE enabled = 1"
+        )
+        return {str(row["product_key"]): int(row["display_stock"]) for row in rows}
 
     async def add_waitlist_entry(self, user_id: int, product_key: str) -> bool:
         async with self.lock:
@@ -687,3 +956,248 @@ class Database:
                 (user_id, product_key),
             )
             await self._conn().commit()
+
+    # ------------------------------------------------------------------
+    # Manual crypto payments
+    #
+    # Lifecycle: awaiting_hash -> pending -> confirmed | rejected, plus
+    # cancelled from either of the first two. Every transition is a guarded
+    # UPDATE that also names the expected current status, so a double-tapped
+    # button or a retried callback can never apply the same step twice — the
+    # second attempt updates zero rows and the caller gets None.
+    # ------------------------------------------------------------------
+
+    async def create_manual_payment(
+        self,
+        user_id: int,
+        asset: str,
+        network: str,
+        address: str,
+        amount_cents: int,
+        currency: str = "USD",
+        crypto_amount: str | None = None,
+        rate: str | None = None,
+        rate_at: str | None = None,
+    ) -> int:
+        if amount_cents <= 0:
+            raise ValueError("amount_cents must be positive")
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                INSERT INTO manual_payments(
+                    user_id, asset, network, address, amount_cents, currency,
+                    crypto_amount, rate, rate_at, status, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_hash', ?)
+                """,
+                (
+                    user_id,
+                    asset,
+                    network,
+                    address,
+                    amount_cents,
+                    currency,
+                    crypto_amount,
+                    rate,
+                    rate_at,
+                    utc_now(),
+                ),
+            )
+            await self._conn().commit()
+            return int(cursor.lastrowid)
+
+    async def get_manual_payment(self, payment_id: int) -> aiosqlite.Row | None:
+        return await self._fetchone(
+            "SELECT * FROM manual_payments WHERE id = ?",
+            (payment_id,),
+        )
+
+    async def find_manual_payment_by_hash(self, tx_hash: str) -> aiosqlite.Row | None:
+        """Look up a hash across all users.
+
+        Used to reject a hash that has already been claimed, including by
+        somebody else — a public explorer makes anyone's tx hash copyable, so
+        without this check one real transfer could be claimed repeatedly.
+        """
+        return await self._fetchone(
+            """
+            SELECT * FROM manual_payments
+            WHERE tx_hash IS NOT NULL
+              AND lower(tx_hash) = lower(?)
+              AND status IN ('pending', 'confirmed')
+            ORDER BY id
+            LIMIT 1
+            """,
+            (tx_hash.strip(),),
+        )
+
+    async def submit_manual_payment_hash(
+        self,
+        payment_id: int,
+        user_id: int,
+        tx_hash: str,
+    ) -> aiosqlite.Row | None:
+        tx_hash = tx_hash.strip()
+        if not tx_hash:
+            raise ValueError("tx_hash cannot be empty")
+        async with self.lock:
+            connection = self._conn()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                duplicate = await self._fetchone(
+                    """
+                    SELECT id FROM manual_payments
+                    WHERE lower(tx_hash) = lower(?)
+                      AND status IN ('pending', 'confirmed')
+                      AND id != ?
+                    LIMIT 1
+                    """,
+                    (tx_hash, payment_id),
+                )
+                if duplicate is not None:
+                    await connection.rollback()
+                    return None
+                now = utc_now()
+                cursor = await connection.execute(
+                    """
+                    UPDATE manual_payments
+                    SET tx_hash = ?, status = 'pending', submitted_at = ?
+                    WHERE id = ? AND user_id = ? AND status = 'awaiting_hash'
+                    """,
+                    (tx_hash, now, payment_id, user_id),
+                )
+                if cursor.rowcount != 1:
+                    await connection.rollback()
+                    return None
+                row = await self._fetchone(
+                    "SELECT * FROM manual_payments WHERE id = ?",
+                    (payment_id,),
+                )
+                await connection.commit()
+                return row
+            except Exception:
+                await connection.rollback()
+                raise
+
+    async def decide_manual_payment(
+        self,
+        payment_id: int,
+        admin_id: int,
+        approve: bool,
+    ) -> aiosqlite.Row | None:
+        """Confirm or reject a pending payment.
+
+        On approval the balance is credited in the same transaction as the
+        status change, so the two can never disagree. The balance UPDATE is
+        written inline rather than through ``add_balance_cents`` because that
+        method takes ``self.lock``, which is not reentrant.
+        """
+        async with self.lock:
+            connection = self._conn()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                now = utc_now()
+                cursor = await connection.execute(
+                    """
+                    UPDATE manual_payments
+                    SET status = ?, decided_at = ?, decided_by = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    ("confirmed" if approve else "rejected", now, admin_id, payment_id),
+                )
+                if cursor.rowcount != 1:
+                    await connection.rollback()
+                    return None
+                row = await self._fetchone(
+                    "SELECT * FROM manual_payments WHERE id = ?",
+                    (payment_id,),
+                )
+                if row is None:
+                    await connection.rollback()
+                    return None
+                if approve:
+                    credited = await connection.execute(
+                        """
+                        UPDATE users
+                        SET balance_cents = balance_cents + ?, updated_at = ?
+                        WHERE user_id = ?
+                        """,
+                        (int(row["amount_cents"]), now, int(row["user_id"])),
+                    )
+                    if credited.rowcount != 1:
+                        # No such user: refuse the whole decision rather than
+                        # mark a payment confirmed that credited nobody.
+                        await connection.rollback()
+                        return None
+                await connection.commit()
+                return row
+            except Exception:
+                await connection.rollback()
+                raise
+
+    async def cancel_manual_payment(self, payment_id: int, user_id: int) -> bool:
+        """Let a buyer drop their own request before an admin has ruled on it."""
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE manual_payments
+                SET status = 'cancelled', decided_at = ?
+                WHERE id = ? AND user_id = ? AND status IN ('awaiting_hash', 'pending')
+                """,
+                (utc_now(), payment_id, user_id),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def expire_stale_manual_payments(self, older_than_hours: int) -> int:
+        """Drop requests where the buyer never sent a hash.
+
+        Only ``awaiting_hash`` rows are touched. A ``pending`` row is waiting on
+        an admin, not on the buyer, and must never be timed out — the money may
+        already be on-chain.
+        """
+        if older_than_hours < 1:
+            raise ValueError("older_than_hours must be at least 1")
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=older_than_hours)
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE manual_payments
+                SET status = 'expired', decided_at = ?
+                WHERE status = 'awaiting_hash' AND created_at < ?
+                """,
+                (utc_now(), cutoff.isoformat()),
+            )
+            await self._conn().commit()
+            return cursor.rowcount
+
+    async def list_pending_manual_payments(self, limit: int = 20) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT m.*, u.username
+            FROM manual_payments m
+            LEFT JOIN users u ON u.user_id = m.user_id
+            WHERE m.status = 'pending'
+            ORDER BY m.id
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+    async def count_pending_manual_payments(self) -> int:
+        row = await self._fetchone(
+            "SELECT COUNT(*) AS total FROM manual_payments WHERE status = 'pending'"
+        )
+        return int(row["total"]) if row is not None else 0
+
+    async def open_manual_payment_for_user(self, user_id: int) -> aiosqlite.Row | None:
+        """The buyer's most recent request that is still in play, if any."""
+        return await self._fetchone(
+            """
+            SELECT * FROM manual_payments
+            WHERE user_id = ? AND status IN ('awaiting_hash', 'pending')
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        )

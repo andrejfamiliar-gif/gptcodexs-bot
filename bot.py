@@ -4,15 +4,16 @@ import asyncio
 import html
 import json
 import logging
+import re
 import secrets
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, ROUND_UP
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
-from aiogram.enums import ParseMode
+from aiogram.enums import ButtonStyle, ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -34,10 +35,16 @@ from i18n import (
     LANGUAGES,
     action_for_text,
     balance_keyboard,
+    catalog_keyboard,
     help_keyboard,
     language_keyboard,
     main_keyboard,
+    mpay_admin_keyboard,
+    mpay_asset_keyboard,
+    mpay_network_keyboard,
+    mpay_pending_keyboard,
     payment_keyboard,
+    payment_method_keyboard,
     plus_keyboard,
     pro_keyboard,
     queue_button_keyboard,
@@ -45,10 +52,13 @@ from i18n import (
     queue_payment_keyboard,
     queue_purchase_keyboard,
     queue_quantity_keyboard,
+    purchase_notification_keyboard,
+    settings_keyboard,
     t,
     top_up_keyboard,
 )
 from crypto_pay import CryptoPayClient
+from crypto_wallets import Wallet
 
 
 LOG_DIR = Path("logs")
@@ -74,6 +84,19 @@ class Runtime:
 
 runtime: Runtime | None = None
 ADMIN_USERS_PAGE_SIZE = 15
+PRODUCT_KEY_RE = re.compile(r"[a-z0-9_]{2,40}")
+PRODUCT_KEY_HINT = "строчные латинские буквы, цифры и _, длина 2–40"
+MAX_PRICE_UNITS = Decimal("1000000")
+
+
+def parse_price_cents(raw_value: str) -> int | None:
+    try:
+        amount = Decimal(raw_value.strip().replace(",", "."))
+    except InvalidOperation:
+        return None
+    if amount <= 0 or amount > MAX_PRICE_UNITS:
+        return None
+    return int((amount * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 class TopUpStates(StatesGroup):
@@ -87,10 +110,26 @@ class ProductQuantityStates(StatesGroup):
 class AdminStockStates(StatesGroup):
     waiting_payload = State()
     waiting_remove_id = State()
+    waiting_quantity = State()
 
 
 class AdminBalanceStates(StatesGroup):
     waiting_amount = State()
+
+
+class AdminProductStates(StatesGroup):
+    waiting_definition = State()
+    waiting_prices = State()
+
+
+class ManualPaymentStates(StatesGroup):
+    waiting_tx_hash = State()
+
+
+# A tx hash is opaque and its shape varies by chain (64 hex on EVM/BTC, base58
+# on Solana, base64-ish on TON), so this only rejects text that cannot be a
+# hash at all. The admin is the real check.
+TX_HASH_RE = re.compile(r"[A-Za-z0-9:_\-]{16,120}")
 
 
 def get_runtime() -> Runtime:
@@ -129,17 +168,61 @@ def is_admin(user_id: int) -> bool:
     return user_id in get_runtime().settings.admin_ids
 
 
-def admin_panel_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+async def sync_runtime_products() -> None:
+    rt = get_runtime()
+    rows = await rt.db.list_products()
+    products: dict[str, Product] = {}
+    regional_prices: dict[str, dict[str, int]] = {}
+    for row in rows:
+        key = str(row["product_key"])
+        products[key] = Product(
+            key=key,
+            title={
+                "ru": str(row["title_ru"]),
+                "en": str(row["title_en"]),
+                "zh": str(row["title_zh"]),
+            },
+            price_cents=int(row["price_usd_cents"]),
+            category=str(row["category"] or "catalog"),
+        )
+        regional_prices[key] = {
+            "en": int(row["price_usd_cents"]),
+            "ru": int(row["price_rub_cents"]),
+            "zh": int(row["price_cny_cents"]),
+        }
+    rt.settings.products.clear()
+    rt.settings.products.update(products)
+    rt.settings.regional_prices.clear()
+    rt.settings.regional_prices.update(regional_prices)
+
+
+def product_label(product: Product, language: str = "ru") -> str:
+    return product.title.get(language, product.title.get("ru", product.key))
+
+
+def admin_panel_keyboard(pending_manual: int = 0) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
+            InlineKeyboardButton(text="📊 Сводка", callback_data="admin:stats"),
+        ],
+        [InlineKeyboardButton(text="📦 Остатки", callback_data="admin:stock")],
+        [InlineKeyboardButton(text="🛍 Товары и цены", callback_data="admin:products")],
+        [InlineKeyboardButton(text="💵 Пополнить баланс", callback_data="admin:balance")],
+    ]
+    # Only shown when something is actually waiting, and coloured so an unread
+    # payment is hard to walk past.
+    if pending_manual > 0:
+        rows.append(
             [
-                InlineKeyboardButton(text="👥 Пользователи", callback_data="admin:users:0"),
-                InlineKeyboardButton(text="📊 Сводка", callback_data="admin:stats"),
-            ],
-            [InlineKeyboardButton(text="📦 Остатки", callback_data="admin:stock")],
-            [InlineKeyboardButton(text="💵 Пополнить баланс", callback_data="admin:balance")],
-        ]
-    )
+                InlineKeyboardButton(
+                    text=f"🪙 Ручные платежи ({pending_manual})",
+                    callback_data="admin:manual",
+                    style=ButtonStyle.DANGER,
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_back_keyboard() -> InlineKeyboardMarkup:
@@ -149,22 +232,50 @@ def admin_back_keyboard() -> InlineKeyboardMarkup:
 
 
 def admin_stock_keyboard() -> InlineKeyboardMarkup:
-    labels = {
-        "gpt_plus_nw": "Plus NW",
-        "gpt_plus_fw": "Plus FW",
-        "pro_5x_nw": "Pro 5x",
-        "pro_20x_nw": "Pro 20x",
-    }
-    rows = [
-        [
-            InlineKeyboardButton(text=f"➕ {label}", callback_data=f"admin:stock:add:{key}"),
-            InlineKeyboardButton(text="➖ Удалить", callback_data="admin:stock:remove"),
-        ]
-        for key, label in labels.items()
-    ]
+    rt = get_runtime()
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, product in rt.settings.products.items():
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"📦 {product_label(product)}",
+                    callback_data=f"admin:stock:payload:{key}",
+                ),
+                InlineKeyboardButton(text="➕1", callback_data=f"admin:stock:adjust:{key}:1"),
+                InlineKeyboardButton(text="➖1", callback_data=f"admin:stock:adjust:{key}:-1"),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(text="✏️ Установить количество", callback_data=f"admin:stock:set:{key}"),
+            ]
+        )
     rows.extend(
         [
+            [InlineKeyboardButton(text="🗑 Удалить данные по ID", callback_data="admin:stock:remove")],
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:stock")],
+            [InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_products_keyboard() -> InlineKeyboardMarkup:
+    rt = get_runtime()
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, product in rt.settings.products.items():
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"✏️ {product_label(product)}",
+                    callback_data=f"admin:product:price:{key}",
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [InlineKeyboardButton(text="➕ Новый товар", callback_data="admin:product:new")],
+            [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:products")],
             [InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")],
         ]
     )
@@ -258,22 +369,41 @@ async def admin_stats_text() -> str:
 async def admin_stock_text() -> str:
     rt = get_runtime()
     stock = await rt.db.available_stock()
+    actual = await rt.db.actual_stock()
+    display = await rt.db.display_stock()
     goods = await rt.db.list_available_goods()
     ids_by_product: dict[str, list[str]] = {}
     for row in goods:
         ids_by_product.setdefault(str(row["product_key"]), []).append(str(row["id"]))
-    labels = {
-        "gpt_plus_nw": "Plus NW",
-        "gpt_plus_fw": "Plus FW",
-        "pro_5x_nw": "Pro 5x",
-        "pro_20x_nw": "Pro 20x",
-    }
     lines = ["📦 Склад", ""]
-    for key, label in labels.items():
+    for key, product in rt.settings.products.items():
         ids = ids_by_product.get(key, [])
-        lines.append(f"{label}: {stock.get(key, 0)}")
+        lines.append(
+            f"{'🟢' if stock.get(key, 0) > 0 else '🔴'} {product_label(product)}: {stock.get(key, 0)}"
+        )
+        lines.append(
+            f"  Реальные данные: {actual.get(key, 0)} · Счётчик: {display.get(key, 0)}"
+        )
         if ids:
             lines.append(f"ID: {', '.join(ids[:80])}")
+    return "\n".join(lines)
+
+
+async def admin_products_text() -> str:
+    rt = get_runtime()
+    lines = ["🛍 Товары и цены", "", "Формат цены: USD · RUB · CNY", ""]
+    if not rt.settings.products:
+        lines.append("Товаров пока нет.")
+        return "\n".join(lines)
+    for key, product in rt.settings.products.items():
+        prices = rt.settings.regional_prices.get(key, {})
+        lines.append(
+            f"• <b>{html.escape(product_label(product))}</b> "
+            f"(<code>{html.escape(key)}</code>)\n"
+            f"  ${prices.get('en', product.price_cents) / 100:.2f} · "
+            f"{prices.get('ru', product.price_cents) / 100:.2f} ₽ · "
+            f"¥{prices.get('zh', product.price_cents) / 100:.2f}"
+        )
     return "\n".join(lines)
 
 
@@ -478,6 +608,56 @@ async def notify_admins_payment(bot: Bot, settlement: dict[str, object]) -> None
             logger.exception("Could not notify admin %s about payment", admin_id)
 
 
+def masked_buyer(username: str | None, user_id: int) -> str:
+    raw = f"@{username}" if username else str(user_id)
+    safe = html.escape(raw)
+    return f"{safe[:3]}***"
+
+
+async def broadcast_stock_replenished(bot: Bot) -> None:
+    rt = get_runtime()
+    for row in await rt.db.list_users_for_broadcast():
+        language = str(row["language"] or "en")
+        try:
+            await bot.send_message(row["user_id"], t(language, "stock_replenished"))
+            await asyncio.sleep(0.04)
+        except Exception:
+            logger.exception("Could not send stock notification to %s", row["user_id"])
+
+
+async def broadcast_purchase_notification(bot: Bot, settlement: dict[str, object]) -> None:
+    if settlement.get("product_key") == "balance_topup":
+        return
+    rt = get_runtime()
+    user_id = int(settlement["user_id"])
+    user = await rt.db.get_user(user_id)
+    buyer = masked_buyer(user["username"] if user else None, user_id)
+    product_key = str(settlement["product_key"])
+    product = rt.settings.products.get(product_key)
+    quantity = int(settlement.get("quantity", 1))
+    amount_cents = int(settlement["amount_cents"])
+    currency = str(settlement.get("currency", "USD"))
+    for row in await rt.db.list_purchase_notification_users():
+        language = str(row["language"] or "en")
+        product_name = product_label(product, language) if product else product_key
+        try:
+            await bot.send_message(
+                row["user_id"],
+                t(
+                    language,
+                    "purchase_notification",
+                    product=html.escape(product_name),
+                    quantity=quantity,
+                    price=format_fiat_price(amount_cents, currency),
+                    buyer=buyer,
+                ),
+                reply_markup=purchase_notification_keyboard(language),
+            )
+            await asyncio.sleep(0.04)
+        except Exception:
+            logger.exception("Could not send purchase notification to %s", row["user_id"])
+
+
 async def settle_invoice(bot: Bot, order_id: int) -> dict[str, object] | None:
     rt = get_runtime()
     settlement = await rt.db.settle_paid_order(
@@ -486,6 +666,7 @@ async def settle_invoice(bot: Bot, order_id: int) -> dict[str, object] | None:
     )
     if settlement is not None:
         await notify_admins_payment(bot, settlement)
+        await broadcast_purchase_notification(bot, settlement)
     if settlement is not None and settlement["delivery_status"] == "waiting_stock":
         language = await rt.db.get_language(settlement["user_id"]) or "en"
         await bot.send_message(
@@ -539,6 +720,14 @@ async def payment_watcher(bot: Bot) -> None:
                 ):
                     logger.info("Stock restored; order %s is ready for delivery", order["id"])
             await deliver_pending_orders(bot)
+            # Requests the buyer never followed up on are cleared so a later
+            # attempt is not blocked by an abandoned one. Rows already waiting
+            # on an admin are left alone by the query itself.
+            expired = await rt.db.expire_stale_manual_payments(
+                rt.settings.manual_crypto_note_hours
+            )
+            if expired:
+                logger.info("Expired %s stale manual payment request(s)", expired)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -639,6 +828,49 @@ async def help_command(message: Message) -> None:
     )
 
 
+async def send_settings_message(message: Message, language: str) -> None:
+    rt = get_runtime()
+    enabled = await rt.db.get_purchase_notifications(user_id_from_message(message))
+    status = t(language, "notifications_on" if enabled else "notifications_off")
+    await message.answer(
+        t(language, "settings", status=status),
+        reply_markup=settings_keyboard(language, enabled),
+    )
+
+
+@router.message(Command("settings"))
+async def settings_command(message: Message) -> None:
+    language = await selected_language(message)
+    if language is None:
+        await send_language_prompt(message)
+        return
+    await send_settings_message(message, language)
+
+
+@router.callback_query(F.data.startswith("purchase_notify:"))
+async def purchase_notifications_callback(callback: CallbackQuery) -> None:
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    action = (callback.data or "").split(":", maxsplit=1)[1]
+    if action not in {"on", "off"}:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    enabled = action == "on"
+    await get_runtime().db.set_purchase_notifications(callback.from_user.id, enabled)
+    await callback.answer(t(language, "notifications_updated"))
+    if callback.message is not None:
+        status = t(language, "notifications_on" if enabled else "notifications_off")
+        try:
+            await callback.message.edit_text(
+                t(language, "settings", status=status),
+                reply_markup=settings_keyboard(language, enabled),
+            )
+        except TelegramBadRequest:
+            pass
+
+
 @router.callback_query(F.data == "topup")
 async def topup_menu_callback(callback: CallbackQuery) -> None:
     language = await ensure_callback_user(callback)
@@ -675,7 +907,45 @@ async def topup_amount_callback(callback: CallbackQuery, state: FSMContext) -> N
         return
     await callback.answer()
     if callback.message is not None:
-        await send_topup_invoice(callback.message, callback.from_user.id, language, amount_cents)
+        await offer_payment_methods(
+            callback.message,
+            callback.from_user.id,
+            language,
+            amount_cents,
+        )
+
+
+async def offer_payment_methods(
+    message: Message,
+    user_id: int,
+    language: str,
+    amount_cents: int,
+) -> None:
+    """Ask Crypto Pay or manual transfer, unless there is nothing to choose.
+
+    With no enabled wallet the manual route does not exist, so the buyer goes
+    straight to a Crypto Pay invoice exactly as before — the choice screen only
+    appears when it is a real choice.
+
+    ``user_id`` is passed in rather than read off ``message``: when this is
+    called from a callback the message was sent by the bot, so its ``from_user``
+    is the bot itself.
+    """
+    rt = get_runtime()
+    if amount_cents < 1 or amount_cents > 1_000_000:
+        await message.answer(t(language, "top_up_invalid"))
+        return
+    if not rt.settings.crypto_wallets:
+        await send_topup_invoice(message, user_id, language, amount_cents)
+        return
+    await message.answer(
+        t(
+            language,
+            "mpay_method",
+            amount=localized_price(rt.settings, language, amount_cents),
+        ),
+        reply_markup=payment_method_keyboard(language, amount_cents),
+    )
 
 
 def parse_amount_cents(raw_value: str) -> int | None:
@@ -727,7 +997,525 @@ async def custom_topup_amount_handler(message: Message, state: FSMContext) -> No
         await message.answer(t(language, "top_up_invalid"))
         return
     await state.clear()
-    await send_topup_invoice(message, user_id_from_message(message), language, amount_cents)
+    await offer_payment_methods(
+        message,
+        user_id_from_message(message),
+        language,
+        amount_cents,
+    )
+
+
+# ----------------------------------------------------------------------
+# Manual crypto payment
+#
+# The buyer transfers straight to one of our addresses, then submits the tx
+# hash. Nothing is credited until an admin has checked that hash on a block
+# explorer and pressed Confirm — the bot never infers a payment from the fact
+# that somebody claims to have sent one.
+# ----------------------------------------------------------------------
+
+
+def format_crypto_amount(value: Decimal) -> str:
+    """Fixed-point with trailing zeros stripped, never scientific notation."""
+    quantized = value.quantize(Decimal("0.00000001"), rounding=ROUND_UP)
+    text = f"{quantized:f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def wallet_assets(wallets: tuple[Wallet, ...]) -> list[str]:
+    """Unique tickers in table order, so the keyboard layout is stable."""
+    seen: list[str] = []
+    for wallet in wallets:
+        if wallet.asset not in seen:
+            seen.append(wallet.asset)
+    return seen
+
+
+async def quote_for_asset(asset: str, amount_cents: int) -> tuple[str | None, str | None, str | None]:
+    """Convert a USD-cent amount into ``asset``.
+
+    Returns ``(crypto_amount, rate, rate_at)``, each ``None`` when Crypto Pay
+    has no rate for the asset. Callers must then show the fiat amount instead
+    of substituting an estimate.
+    """
+    rt = get_runtime()
+    try:
+        rates, fetched_at = await rt.crypto.exchange_rates("USD")
+    except Exception:
+        logger.exception("Could not load exchange rates for %s", asset)
+        return None, None, None
+    rate = rates.get(asset.upper())
+    if rate is None or rate <= 0 or fetched_at is None:
+        return None, None, None
+    crypto_amount = Decimal(amount_cents) / Decimal("100") / rate
+    return (
+        format_crypto_amount(crypto_amount),
+        format_crypto_amount(rate),
+        fetched_at.strftime("%Y-%m-%d %H:%M"),
+    )
+
+
+@router.callback_query(F.data.startswith("cpay:"))
+async def cpay_callback(callback: CallbackQuery) -> None:
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        amount_cents = int((callback.data or "").split(":", maxsplit=1)[1])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await send_topup_invoice(
+            callback.message,
+            callback.from_user.id,
+            language,
+            amount_cents,
+        )
+
+
+@router.callback_query(F.data.startswith("mpay:assets:"))
+async def mpay_assets_callback(callback: CallbackQuery) -> None:
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        amount_cents = int((callback.data or "").split(":", maxsplit=2)[2])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    wallets = rt.settings.crypto_wallets
+    if not wallets:
+        await callback.answer()
+        if callback.message is not None:
+            await callback.message.answer(
+                t(language, "mpay_unavailable", support=support_contact(rt.settings))
+            )
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            t(
+                language,
+                "mpay_choose_asset",
+                amount=localized_price(rt.settings, language, amount_cents),
+            ),
+            reply_markup=mpay_asset_keyboard(language, wallet_assets(wallets), amount_cents),
+        )
+
+
+@router.callback_query(F.data.startswith("mpay:asset:"))
+async def mpay_asset_callback(callback: CallbackQuery) -> None:
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 4:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    asset = parts[2].upper()
+    try:
+        amount_cents = int(parts[3])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    options = [
+        (index, wallet.network)
+        for index, wallet in enumerate(rt.settings.crypto_wallets)
+        if wallet.asset == asset
+    ]
+    if not options:
+        await callback.answer(t(language, "mpay_stale"), show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is None:
+        return
+    if len(options) == 1:
+        await start_manual_payment(
+            callback.message,
+            callback.from_user.id,
+            language,
+            options[0][0],
+            asset,
+            amount_cents,
+        )
+        return
+    await callback.message.answer(
+        t(language, "mpay_choose_network", asset=asset),
+        reply_markup=mpay_network_keyboard(language, asset, options, amount_cents),
+    )
+
+
+@router.callback_query(F.data.startswith("mpay:w:"))
+async def mpay_wallet_callback(callback: CallbackQuery) -> None:
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    try:
+        index = int(parts[2])
+        amount_cents = int(parts[4])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    await callback.answer()
+    if callback.message is not None:
+        await start_manual_payment(
+            callback.message,
+            callback.from_user.id,
+            language,
+            index,
+            parts[3].upper(),
+            amount_cents,
+        )
+
+
+async def start_manual_payment(
+    message: Message,
+    user_id: int,
+    language: str,
+    index: int,
+    asset: str,
+    amount_cents: int,
+) -> None:
+    rt = get_runtime()
+    wallets = rt.settings.crypto_wallets
+    # The index came from a button that may predate a restart, so never trust
+    # it on its own: the asset carried alongside it must still match.
+    if index < 0 or index >= len(wallets) or wallets[index].asset != asset:
+        await message.answer(t(language, "mpay_stale"))
+        return
+    if amount_cents < 1 or amount_cents > 1_000_000:
+        await message.answer(t(language, "top_up_invalid"))
+        return
+    wallet = wallets[index]
+
+    existing = await rt.db.open_manual_payment_for_user(user_id)
+    if existing is not None:
+        if str(existing["status"]) == "pending":
+            # Hash already submitted and an admin is looking at it; a second
+            # request now would just be two claims on one balance.
+            await message.answer(
+                t(language, "mpay_open_exists", payment_id=int(existing["id"]))
+            )
+            return
+        # Still awaiting a hash, so the buyer simply changed their mind about
+        # the coin. Drop the abandoned request and continue.
+        await rt.db.cancel_manual_payment(int(existing["id"]), user_id)
+
+    crypto_amount, rate, rate_at = await quote_for_asset(asset, amount_cents)
+    payment_id = await rt.db.create_manual_payment(
+        user_id=user_id,
+        asset=wallet.asset,
+        network=wallet.network,
+        address=wallet.address,
+        amount_cents=amount_cents,
+        currency="USD",
+        crypto_amount=crypto_amount,
+        rate=rate,
+        rate_at=rate_at,
+    )
+    fiat_amount = localized_price(rt.settings, language, amount_cents)
+    hours = rt.settings.manual_crypto_note_hours
+    if crypto_amount is None:
+        text = t(
+            language,
+            "mpay_instructions_no_rate",
+            payment_id=payment_id,
+            asset=wallet.asset,
+            network=html.escape(wallet.network),
+            address=html.escape(wallet.address),
+            fiat_amount=fiat_amount,
+            hours=hours,
+        )
+    else:
+        text = t(
+            language,
+            "mpay_instructions",
+            payment_id=payment_id,
+            asset=wallet.asset,
+            network=html.escape(wallet.network),
+            address=html.escape(wallet.address),
+            crypto_amount=crypto_amount,
+            fiat_amount=fiat_amount,
+            rate=f"${rate}",
+            rate_at=rate_at,
+            hours=hours,
+        )
+    await message.answer(text, reply_markup=mpay_pending_keyboard(language, payment_id))
+
+
+@router.callback_query(F.data.startswith("mpay:hash:"))
+async def mpay_hash_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        payment_id = int((callback.data or "").split(":", maxsplit=2)[2])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    payment = await rt.db.get_manual_payment(payment_id)
+    if (
+        payment is None
+        or int(payment["user_id"]) != callback.from_user.id
+        or str(payment["status"]) != "awaiting_hash"
+    ):
+        await callback.answer(t(language, "mpay_stale"), show_alert=True)
+        return
+    await state.set_state(ManualPaymentStates.waiting_tx_hash)
+    await state.update_data(mpay_id=payment_id)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(t(language, "mpay_ask_hash"))
+
+
+@router.callback_query(F.data.startswith("mpay:cancel:"))
+async def mpay_cancel_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        payment_id = int((callback.data or "").split(":", maxsplit=2)[2])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    cancelled = await rt.db.cancel_manual_payment(payment_id, callback.from_user.id)
+    if not cancelled:
+        await callback.answer(t(language, "mpay_stale"), show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            t(
+                language,
+                "mpay_cancelled",
+                payment_id=payment_id,
+                support=support_contact(rt.settings),
+            )
+        )
+
+
+@router.message(ManualPaymentStates.waiting_tx_hash)
+async def mpay_tx_hash_handler(message: Message, state: FSMContext, bot: Bot) -> None:
+    rt = get_runtime()
+    language = await selected_language(message)
+    if language is None:
+        await state.clear()
+        await send_language_prompt(message)
+        return
+    data = await state.get_data()
+    payment_id = data.get("mpay_id")
+    if not isinstance(payment_id, int):
+        await state.clear()
+        await message.answer(t(language, "mpay_stale"))
+        return
+    tx_hash = (message.text or "").strip()
+    # A menu button must not be mistaken for a hash, or a buyer who has already
+    # sent funds gets stuck in this state with no way out. The request stays
+    # awaiting_hash, so the "I have sent it" button on the payment message keeps
+    # working when they come back.
+    if action_for_text(language, tx_hash) is not None:
+        await state.clear()
+        await message.answer(t(language, "mpay_hash_aborted"))
+        return
+    if not TX_HASH_RE.fullmatch(tx_hash):
+        await message.answer(t(language, "mpay_hash_invalid"))
+        return
+    user_id = user_id_from_message(message)
+    payment = await rt.db.submit_manual_payment_hash(payment_id, user_id, tx_hash)
+    if payment is None:
+        # Either the hash is already claimed or the request is no longer open.
+        clash = await rt.db.find_manual_payment_by_hash(tx_hash)
+        await state.clear()
+        await message.answer(
+            t(language, "mpay_hash_duplicate", support=support_contact(rt.settings))
+            if clash is not None
+            else t(language, "mpay_stale")
+        )
+        return
+    await state.clear()
+    await message.answer(
+        t(
+            language,
+            "mpay_submitted",
+            payment_id=payment_id,
+            support=support_contact(rt.settings),
+        )
+    )
+    await notify_admins_manual_payment(bot, payment)
+
+
+def manual_payment_admin_text(row: object) -> str:
+    """The admin's view of one request: who, how much, where, and the hash.
+
+    Takes a row from either ``get_manual_payment`` or
+    ``list_pending_manual_payments``; the latter also carries ``username``.
+    """
+    user_id = int(row["user_id"])  # type: ignore[index]
+    try:
+        username = row["username"]  # type: ignore[index]
+    except (IndexError, KeyError):
+        username = None
+    label = f"@{username} ({user_id})" if username else str(user_id)
+    crypto_amount = row["crypto_amount"]  # type: ignore[index]
+    expected = (
+        f"{crypto_amount} {row['asset']}"  # type: ignore[index]
+        if crypto_amount
+        # Stated plainly rather than shown as a number the bot never computed.
+        else "не рассчитано — курс был недоступен"
+    )
+    return t(
+        "ru",
+        "mpay_admin_new",
+        payment_id=int(row["id"]),  # type: ignore[index]
+        user=html.escape(label),
+        asset=row["asset"],  # type: ignore[index]
+        network=html.escape(str(row["network"])),  # type: ignore[index]
+        fiat_amount=format_usd(int(row["amount_cents"])),  # type: ignore[index]
+        crypto_amount=html.escape(expected),
+        address=html.escape(str(row["address"])),  # type: ignore[index]
+        tx_hash=html.escape(str(row["tx_hash"])),  # type: ignore[index]
+    )
+
+
+async def notify_admins_manual_payment(bot: Bot, payment: object) -> None:
+    rt = get_runtime()
+    user_id = int(payment["user_id"])  # type: ignore[index]
+    user = await rt.db.get_user(user_id)
+    username = user["username"] if user is not None else None
+    text = manual_payment_admin_text(
+        {
+            "id": payment["id"],  # type: ignore[index]
+            "user_id": user_id,
+            "username": username,
+            "asset": payment["asset"],  # type: ignore[index]
+            "network": payment["network"],  # type: ignore[index]
+            "amount_cents": payment["amount_cents"],  # type: ignore[index]
+            "crypto_amount": payment["crypto_amount"],  # type: ignore[index]
+            "address": payment["address"],  # type: ignore[index]
+            "tx_hash": payment["tx_hash"],  # type: ignore[index]
+        }
+    )
+    markup = mpay_admin_keyboard(int(payment["id"]))  # type: ignore[index]
+    for admin_id in rt.settings.admin_ids:
+        try:
+            await bot.send_message(admin_id, text, reply_markup=markup)
+        except Exception:
+            # One unreachable admin must not stop the others from being told.
+            logger.exception("Could not notify admin %s about manual payment", admin_id)
+
+
+@router.callback_query(F.data.startswith("mpay:ok:"))
+async def mpay_admin_confirm_callback(callback: CallbackQuery, bot: Bot) -> None:
+    await decide_manual_payment_from_callback(callback, bot, approve=True)
+
+
+@router.callback_query(F.data.startswith("mpay:rej:"))
+async def mpay_admin_reject_callback(callback: CallbackQuery, bot: Bot) -> None:
+    await decide_manual_payment_from_callback(callback, bot, approve=False)
+
+
+async def decide_manual_payment_from_callback(
+    callback: CallbackQuery,
+    bot: Bot,
+    approve: bool,
+) -> None:
+    if not await admin_only_callback(callback):
+        return
+    rt = get_runtime()
+    try:
+        payment_id = int((callback.data or "").split(":", maxsplit=2)[2])
+    except ValueError:
+        await callback.answer("Некорректный запрос", show_alert=True)
+        return
+    payment = await rt.db.decide_manual_payment(payment_id, callback.from_user.id, approve)
+    if payment is None:
+        # Guarded UPDATE matched nothing: another admin already ruled on it.
+        await callback.answer(t("ru", "mpay_admin_already", payment_id=payment_id), show_alert=True)
+        return
+    user_id = int(payment["user_id"])
+    amount_cents = int(payment["amount_cents"])
+    user = await rt.db.get_user(user_id)
+    username = user["username"] if user is not None else None
+    label = f"@{username} ({user_id})" if username else str(user_id)
+    await callback.answer()
+    if callback.message is not None:
+        summary = (
+            t(
+                "ru",
+                "mpay_admin_confirmed",
+                payment_id=payment_id,
+                user=html.escape(label),
+                amount=format_usd(amount_cents),
+            )
+            if approve
+            else t("ru", "mpay_admin_rejected", payment_id=payment_id)
+        )
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        await callback.message.answer(summary)
+
+    language = await rt.db.get_language(user_id) or "en"
+    try:
+        if approve:
+            balance = await rt.db.get_balance_cents(user_id)
+            await bot.send_message(
+                user_id,
+                t(
+                    language,
+                    "mpay_confirmed",
+                    payment_id=payment_id,
+                    amount=localized_price(rt.settings, language, amount_cents),
+                    balance=localized_price(rt.settings, language, balance),
+                ),
+            )
+        else:
+            await bot.send_message(
+                user_id,
+                t(
+                    language,
+                    "mpay_rejected",
+                    payment_id=payment_id,
+                    support=support_contact(rt.settings),
+                ),
+            )
+    except Exception:
+        # The decision already stands in the database; a blocked buyer must not
+        # roll it back.
+        logger.exception("Could not tell user %s about manual payment %s", user_id, payment_id)
+
+
+@router.message(Command("pending"))
+async def pending_manual_payments_command(message: Message) -> None:
+    if not is_admin(user_id_from_message(message)):
+        return
+    rows = await get_runtime().db.list_pending_manual_payments()
+    if not rows:
+        await message.answer(t("ru", "mpay_admin_none_pending"))
+        return
+    for row in rows:
+        await message.answer(
+            manual_payment_admin_text(row),
+            reply_markup=mpay_admin_keyboard(int(row["id"])),
+        )
 
 
 @router.message(ProductQuantityStates.waiting_quantity)
@@ -1013,6 +1801,7 @@ async def balance_payment_callback(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     await notify_admins_payment(bot, settlement)
+    await broadcast_purchase_notification(bot, settlement)
     if settlement["delivery_status"] == "waiting_stock":
         await bot.send_message(
             callback.from_user.id,
@@ -1076,7 +1865,12 @@ async def admin_command(message: Message) -> None:
     if not is_admin(user_id_from_message(message)):
         await message.answer(t("en", "admin_only"))
         return
-    await message.answer("🔐 Админ-панель", reply_markup=admin_panel_keyboard())
+    await message.answer(
+        "🔐 Админ-панель",
+        reply_markup=admin_panel_keyboard(
+            await get_runtime().db.count_pending_manual_payments()
+        ),
+    )
 
 
 @router.callback_query(F.data == "admin:home")
@@ -1084,7 +1878,30 @@ async def admin_home_callback(callback: CallbackQuery) -> None:
     if not await admin_only_callback(callback):
         return
     await callback.answer()
-    await edit_admin_message(callback, "🔐 Админ-панель", admin_panel_keyboard())
+    await edit_admin_message(
+        callback,
+        "🔐 Админ-панель",
+        admin_panel_keyboard(await get_runtime().db.count_pending_manual_payments()),
+    )
+
+
+@router.callback_query(F.data == "admin:manual")
+async def admin_manual_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    rt = get_runtime()
+    rows = await rt.db.list_pending_manual_payments()
+    await callback.answer()
+    if callback.message is None:
+        return
+    if not rows:
+        await callback.message.answer(t("ru", "mpay_admin_none_pending"))
+        return
+    for row in rows:
+        await callback.message.answer(
+            manual_payment_admin_text(row),
+            reply_markup=mpay_admin_keyboard(int(row["id"])),
+        )
 
 
 @router.callback_query(F.data.startswith("admin:users:"))
@@ -1116,8 +1933,11 @@ async def admin_balance_callback(callback: CallbackQuery, state: FSMContext) -> 
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(
-            "Введите Telegram ID пользователя и сумму в USD через пробел.\n"
-            "Пример: 123456789 10.50\n\n"
+            "Введите получателя и сумму в USD через пробел.\n"
+            "Получатель — Telegram ID или @username.\n\n"
+            "Примеры:\n"
+            "<code>123456789 10.50</code>\n"
+            "<code>@durov 10.50</code>\n\n"
             "Для отмены отправьте /cancel."
         )
 
@@ -1137,25 +1957,44 @@ async def admin_balance_handler(message: Message, state: FSMContext) -> None:
     parts = raw_text.split()
     if len(parts) != 2:
         await message.answer(
-            "Формат: Telegram ID сумма в USD\n"
-            "Пример: 123456789 10.50\n"
+            "Формат: получатель сумма в USD\n"
+            "Получатель — Telegram ID или @username.\n"
+            "Примеры: <code>123456789 10.50</code> или <code>@durov 10.50</code>\n"
             "Для отмены: /cancel"
         )
         return
-    try:
-        target_user_id = int(parts[0])
-    except ValueError:
-        await message.answer("Telegram ID должен быть числом.")
-        return
-    if target_user_id <= 0:
-        await message.answer("Telegram ID должен быть положительным числом.")
-        return
-    amount_cents = parse_amount_cents(parts[1])
+
+    recipient, raw_amount = parts
+    rt = get_runtime()
+    if recipient.lstrip("-").isdigit():
+        target_user_id = int(recipient)
+        if target_user_id <= 0:
+            await message.answer("Telegram ID должен быть положительным числом.")
+            return
+        target_label = f"<code>{target_user_id}</code>"
+    else:
+        row = await rt.db.find_user_by_username(recipient)
+        if row is None:
+            await message.answer(
+                f"Пользователь {html.escape(recipient)} не найден в базе.\n"
+                "Он должен сначала открыть бота через /start, "
+                "либо укажи числовой Telegram ID."
+            )
+            return
+        target_user_id = int(row["user_id"])
+        stored = row["username"]
+        target_label = (
+            f"@{html.escape(str(stored))} (<code>{target_user_id}</code>)"
+            if stored
+            else f"<code>{target_user_id}</code>"
+        )
+
+    amount_cents = parse_amount_cents(raw_amount)
     if amount_cents is None:
         await message.answer("Введите положительную сумму в USD, например 10.50.")
         return
 
-    new_balance_cents = await get_runtime().db.add_balance_cents(target_user_id, amount_cents)
+    new_balance_cents = await rt.db.add_balance_cents(target_user_id, amount_cents)
     if new_balance_cents is None:
         await message.answer(
             "Пользователь не найден в базе. Сначала он должен открыть бота через /start."
@@ -1165,11 +2004,13 @@ async def admin_balance_handler(message: Message, state: FSMContext) -> None:
     await state.clear()
     await message.answer(
         "Баланс пополнен.\n"
-        f"Пользователь: <code>{target_user_id}</code>\n"
+        f"Пользователь: {target_label}\n"
         f"Зачислено: <b>{format_usd(amount_cents)}</b>\n"
         f"Новый баланс: <b>{format_usd(new_balance_cents)}</b>\n\n"
         "Уведомление пользователю не отправлялось.",
-        reply_markup=admin_panel_keyboard(),
+        reply_markup=admin_panel_keyboard(
+            await get_runtime().db.count_pending_manual_payments()
+        ),
     )
 
 
@@ -1179,17 +2020,9 @@ async def admin_stock_callback(callback: CallbackQuery) -> None:
         return
     await callback.answer()
     await edit_admin_message(callback, await admin_stock_text(), admin_stock_keyboard())
-    return
-    stock = await get_runtime().db.available_stock()
-    if stock:
-        stock_text = "\n".join(f"{key}: {count}" for key, count in sorted(stock.items()))
-    else:
-        stock_text = "Склад пуст."
-    await callback.answer()
-    await edit_admin_message(callback, f"📦 Остатки\n\n{stock_text}", admin_back_keyboard())
 
 
-@router.callback_query(F.data.startswith("admin:stock:add:"))
+@router.callback_query(F.data.startswith("admin:stock:payload:"))
 async def admin_stock_add_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if not await admin_only_callback(callback):
         return
@@ -1222,7 +2055,7 @@ async def admin_stock_remove_callback(callback: CallbackQuery, state: FSMContext
 
 
 @router.message(AdminStockStates.waiting_payload)
-async def admin_stock_payload_handler(message: Message, state: FSMContext) -> None:
+async def admin_stock_payload_handler(message: Message, state: FSMContext, bot: Bot) -> None:
     if not is_admin(user_id_from_message(message)):
         await state.clear()
         await message.answer(t("en", "admin_only"))
@@ -1247,6 +2080,9 @@ async def admin_stock_payload_handler(message: Message, state: FSMContext) -> No
         f"Добавлено товаров: {len(ids)}\nID: {', '.join(ids)}",
         reply_markup=admin_stock_keyboard(),
     )
+    await notify_waitlist_for_product(bot, product_key)
+    await broadcast_stock_replenished(bot)
+    await deliver_pending_orders(bot)
 
 
 @router.message(AdminStockStates.waiting_remove_id)
@@ -1272,6 +2108,267 @@ async def admin_stock_remove_handler(message: Message, state: FSMContext) -> Non
     await state.clear()
     await message.answer(
         f"Удалено товаров: {removed}",
+        reply_markup=admin_stock_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "admin:products")
+async def admin_products_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await callback.answer()
+    await edit_admin_message(callback, await admin_products_text(), admin_products_keyboard())
+
+
+@router.callback_query(F.data.startswith("admin:product:price:"))
+async def admin_product_price_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await admin_only_callback(callback):
+        return
+    product_key = (callback.data or "").split(":", maxsplit=3)[-1]
+    rt = get_runtime()
+    if product_key not in rt.settings.products:
+        await callback.answer("Неизвестный товар", show_alert=True)
+        return
+    prices = rt.settings.regional_prices.get(product_key, {})
+    await state.set_state(AdminProductStates.waiting_prices)
+    await state.update_data(mode="edit", product_key=product_key)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"Товар: <code>{html.escape(product_key)}</code>\n"
+            f"Текущие цены: {prices.get('en', 0) / 100:.2f} USD · "
+            f"{prices.get('ru', 0) / 100:.2f} RUB · {prices.get('zh', 0) / 100:.2f} CNY\n\n"
+            "Отправь три новые цены через пробел в порядке USD RUB CNY.\n"
+            "Пример: 1.63 130 11.74\n\n"
+            "Для отмены отправь /cancel."
+        )
+
+
+@router.callback_query(F.data == "admin:product:new")
+async def admin_product_new_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await state.set_state(AdminProductStates.waiting_definition)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            "Отправь описание товара одной строкой через <code>|</code>:\n"
+            "<code>key | category | title_ru | title_en | title_zh</code>\n\n"
+            "Пример:\n"
+            "<code>gpt_team_nw | plus | GPT Team NW | GPT Team NW | GPT Team NW</code>\n\n"
+            f"key: только {PRODUCT_KEY_HINT}\n"
+            "После этого бот попросит цены.\n\n"
+            "Для отмены отправь /cancel."
+        )
+
+
+@router.message(AdminProductStates.waiting_definition)
+async def admin_product_definition_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await state.clear()
+        await message.answer(t("en", "admin_only"))
+        return
+    raw_text = (message.text or "").strip()
+    if raw_text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Создание товара отменено.")
+        return
+    parts = [part.strip() for part in raw_text.split("|")]
+    if len(parts) != 5:
+        await message.answer(
+            "Нужно ровно 5 полей через <code>|</code>:\n"
+            "<code>key | category | title_ru | title_en | title_zh</code>"
+        )
+        return
+    product_key, category, title_ru, title_en, title_zh = parts
+    if not PRODUCT_KEY_RE.fullmatch(product_key):
+        await message.answer(f"Некорректный key. Разрешено: {PRODUCT_KEY_HINT}")
+        return
+    if product_key in get_runtime().settings.products:
+        await message.answer("Товар с таким key уже существует.")
+        return
+    if not category or len(category) > 40:
+        await message.answer("Категория обязательна и не длиннее 40 символов.")
+        return
+    if not (title_ru and title_en and title_zh):
+        await message.answer("Все три названия обязательны.")
+        return
+    if max(len(title_ru), len(title_en), len(title_zh)) > 80:
+        await message.answer("Название не длиннее 80 символов.")
+        return
+    await state.set_state(AdminProductStates.waiting_prices)
+    await state.update_data(
+        mode="new",
+        product_key=product_key,
+        category=category,
+        title_ru=title_ru,
+        title_en=title_en,
+        title_zh=title_zh,
+    )
+    await message.answer(
+        f"Товар <code>{html.escape(product_key)}</code> принят.\n\n"
+        "Теперь отправь три цены через пробел в порядке USD RUB CNY.\n"
+        "Пример: 1.63 130 11.74\n\n"
+        "Для отмены отправь /cancel."
+    )
+
+
+@router.message(AdminProductStates.waiting_prices)
+async def admin_product_prices_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await state.clear()
+        await message.answer(t("en", "admin_only"))
+        return
+    raw_text = (message.text or "").strip()
+    if raw_text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение цен отменено.")
+        return
+    parts = raw_text.split()
+    if len(parts) != 3:
+        await message.answer("Нужно ровно три числа: USD RUB CNY.\nПример: 1.63 130 11.74")
+        return
+    parsed = [parse_price_cents(part) for part in parts]
+    if any(value is None for value in parsed):
+        await message.answer(
+            "Каждая цена должна быть положительным числом не больше 1 000 000."
+        )
+        return
+    price_usd, price_rub, price_cny = (int(value) for value in parsed)  # type: ignore[arg-type]
+
+    data = await state.get_data()
+    mode = str(data.get("mode", "edit"))
+    product_key = str(data.get("product_key", ""))
+    rt = get_runtime()
+
+    if mode == "new":
+        try:
+            created = await rt.db.create_product(
+                product_key,
+                str(data.get("category", "catalog")),
+                str(data.get("title_ru", product_key)),
+                str(data.get("title_en", product_key)),
+                str(data.get("title_zh", product_key)),
+                price_usd,
+                price_rub,
+                price_cny,
+            )
+        except ValueError as exc:
+            await message.answer(f"Не удалось создать товар: {exc}")
+            return
+        if not created:
+            await state.clear()
+            await message.answer("Товар с таким key уже существует.")
+            return
+        await sync_runtime_products()
+        await state.clear()
+        await message.answer(
+            f"✅ Товар создан: <code>{html.escape(product_key)}</code>\n"
+            f"{price_usd / 100:.2f} USD · {price_rub / 100:.2f} RUB · {price_cny / 100:.2f} CNY\n\n"
+            "Счётчик наличия — 0. Добавь реальные данные через раздел «Остатки».",
+            reply_markup=admin_products_keyboard(),
+        )
+        return
+
+    if product_key not in rt.settings.products:
+        await state.clear()
+        await message.answer("Товар не найден.")
+        return
+    try:
+        updated = await rt.db.update_product_prices(product_key, price_usd, price_rub, price_cny)
+    except ValueError as exc:
+        await message.answer(f"Не удалось обновить цены: {exc}")
+        return
+    if not updated:
+        await state.clear()
+        await message.answer("Товар не найден или отключён.")
+        return
+    await sync_runtime_products()
+    await state.clear()
+    await message.answer(
+        f"✅ Цены обновлены: <code>{html.escape(product_key)}</code>\n"
+        f"{price_usd / 100:.2f} USD · {price_rub / 100:.2f} RUB · {price_cny / 100:.2f} CNY",
+        reply_markup=admin_products_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("admin:stock:adjust:"))
+async def admin_stock_adjust_callback(callback: CallbackQuery) -> None:
+    if not await admin_only_callback(callback):
+        return
+    parts = (callback.data or "").split(":")
+    if len(parts) != 5:
+        await callback.answer("Некорректная кнопка", show_alert=True)
+        return
+    product_key = parts[3]
+    try:
+        delta = int(parts[4])
+    except ValueError:
+        await callback.answer("Некорректное значение", show_alert=True)
+        return
+    result = await get_runtime().db.adjust_display_stock(product_key, delta)
+    if result is None:
+        await callback.answer("Неизвестный товар", show_alert=True)
+        return
+    old_value, new_value = result
+    await callback.answer(f"Счётчик: {old_value} → {new_value}")
+    await edit_admin_message(callback, await admin_stock_text(), admin_stock_keyboard())
+
+
+@router.callback_query(F.data.startswith("admin:stock:set:"))
+async def admin_stock_set_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not await admin_only_callback(callback):
+        return
+    product_key = (callback.data or "").split(":", maxsplit=3)[-1]
+    if product_key not in get_runtime().settings.products:
+        await callback.answer("Неизвестный товар", show_alert=True)
+        return
+    await state.set_state(AdminStockStates.waiting_quantity)
+    await state.update_data(product_key=product_key)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            f"Товар: <code>{html.escape(product_key)}</code>\n\n"
+            "Отправь новое значение счётчика наличия — целое число от 0.\n"
+            "Счётчик влияет только на отображение, реальные данные он не создаёт.\n\n"
+            "Для отмены отправь /cancel."
+        )
+
+
+@router.message(AdminStockStates.waiting_quantity)
+async def admin_stock_quantity_handler(message: Message, state: FSMContext) -> None:
+    if not is_admin(user_id_from_message(message)):
+        await state.clear()
+        await message.answer(t("en", "admin_only"))
+        return
+    raw_text = (message.text or "").strip()
+    if raw_text.lower() == "/cancel":
+        await state.clear()
+        await message.answer("Изменение счётчика отменено.")
+        return
+    if not raw_text.isdigit():
+        await message.answer("Отправь неотрицательное целое число, например 10.")
+        return
+    value = int(raw_text)
+    if value > 100_000:
+        await message.answer("Слишком большое значение. Максимум 100000.")
+        return
+    data = await state.get_data()
+    product_key = str(data.get("product_key", ""))
+    try:
+        result = await get_runtime().db.set_display_stock(product_key, value)
+    except ValueError as exc:
+        await message.answer(f"Не удалось изменить счётчик: {exc}")
+        return
+    if result is None:
+        await state.clear()
+        await message.answer("Товар не найден.")
+        return
+    old_value, new_value = result
+    await state.clear()
+    await message.answer(
+        f"✅ Счётчик наличия обновлён: {old_value} → {new_value}\n"
+        f"Товар: <code>{html.escape(product_key)}</code>",
         reply_markup=admin_stock_keyboard(),
     )
 
@@ -1335,13 +2432,21 @@ async def menu_handler(message: Message, bot: Bot) -> None:
     if action == "plus":
         await message.answer(
             t(language, "choose_plus_plan"),
-            reply_markup=plus_keyboard(language, product_price_labels(rt.settings, language)),
+            reply_markup=plus_keyboard(
+                language,
+                product_price_labels(rt.settings, language),
+                stock=await rt.db.available_stock(),
+            ),
         )
         return
     if action == "pro":
         await message.answer(
             t(language, "choose_pro_plan"),
-            reply_markup=pro_keyboard(language, product_price_labels(rt.settings, language)),
+            reply_markup=pro_keyboard(
+                language,
+                product_price_labels(rt.settings, language),
+                stock=await rt.db.available_stock(),
+            ),
         )
         return
     if action == "balance":
@@ -1358,22 +2463,49 @@ async def menu_handler(message: Message, bot: Bot) -> None:
         return
     if action == "stock":
         stock = await rt.db.available_stock()
+        if not rt.settings.products:
+            await message.answer(t(language, "catalog_empty"), reply_markup=main_keyboard(language))
+            return
+        lines = []
+        for key, product in rt.settings.products.items():
+            count = stock.get(key, 0)
+            marker = "🟢" if count > 0 else "🔴"
+            lines.append(f"{marker} {html.escape(product_label(product, language))}: {count}")
         await message.answer(
-            t(
-                language,
-                "stock",
-                plus_nw=stock.get("gpt_plus_nw", 0),
-                plus_fw=stock.get("gpt_plus_fw", 0),
-                pro5_nw=stock.get("pro_5x_nw", 0),
-                pro20_nw=stock.get("pro_20x_nw", 0),
-            ),
+            t(language, "stock_list", items="\n".join(lines)),
             reply_markup=main_keyboard(language),
         )
+        return
+    if action == "catalog":
+        stock = await rt.db.available_stock()
+        items = [
+            (
+                key,
+                product_label(product, language),
+                product_price(rt.settings, product, language),
+                stock.get(key, 0),
+            )
+            for key, product in rt.settings.products.items()
+        ]
+        if not items:
+            await message.answer(t(language, "catalog_empty"), reply_markup=main_keyboard(language))
+            return
+        await message.answer(
+            t(language, "catalog_title"),
+            reply_markup=catalog_keyboard(language, items),
+        )
+        return
+    if action == "settings":
+        await send_settings_message(message, language)
         return
     if action == "queue":
         await message.answer(
             t(language, "queue"),
-            reply_markup=queue_keyboard(language, product_price_labels(rt.settings, language)),
+            reply_markup=queue_keyboard(
+                language,
+                product_price_labels(rt.settings, language),
+                stock=await rt.db.available_stock(),
+            ),
         )
         return
     if action == "help":
@@ -1398,6 +2530,11 @@ async def main() -> None:
     settings = load_settings()
     db = Database(settings.db_path)
     await db.initialize()
+    await db.ensure_product_catalog(
+        settings.products,
+        settings.regional_prices,
+        settings.stock_display,
+    )
     crypto = CryptoPayClient(
         token=settings.crypto_pay_token,
         base_url=settings.crypto_pay_base_url,
@@ -1405,6 +2542,7 @@ async def main() -> None:
     )
     await crypto.start()
     runtime = Runtime(settings=settings, db=db, crypto=crypto)
+    await sync_runtime_products()
 
     bot = Bot(
         token=settings.bot_token,

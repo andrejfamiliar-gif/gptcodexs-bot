@@ -1,4 +1,7 @@
-aiogram>=3.20,<4.0
+# 3.30 is the earliest version verified to carry InlineKeyboardButton.style
+# (Bot API 10.2). Older 3.x releases reject the field outright, so the floor
+# cannot drop below this while the keyboards use coloured buttons.
+aiogram>=3.30,<4.0
 aiosqlite>=0.20,<1.0
 aiohttp>=3.9,<4.0
 aiohttp-socks>=0.9,<1.0

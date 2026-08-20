@@ -24,6 +24,12 @@ jobs:
       CRYPTO_PAY_TOKEN: ${{ secrets.CRYPTO_PAY_TOKEN }}
       STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
       ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+      # The manual-payment receive addresses. Kept in a secret rather than in
+      # the repository because this repository is public. If the secret is
+      # absent the value is empty, no wallet table loads, and buyers simply get
+      # the normal Crypto Pay invoice.
+      CRYPTO_WALLETS: ${{ secrets.CRYPTO_WALLETS }}
+      MANUAL_CRYPTO_NOTE_HOURS: "24"
       TELEGRAM_PROXY: ""
       DB_PATH: shop.sqlite3
       PAYMENT_POLL_SECONDS: "15"

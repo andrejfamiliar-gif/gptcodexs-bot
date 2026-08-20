@@ -8,6 +8,8 @@ from urllib.request import getproxies
 
 from dotenv import load_dotenv
 
+from crypto_wallets import Wallet, enabled_wallets, load_wallets
+
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -33,6 +35,7 @@ class Product:
     key: str
     title: dict[str, str]
     price_cents: int
+    category: str = "catalog"
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,8 @@ class Settings:
     currency_rates: dict[str, Decimal]
     regional_prices: dict[str, dict[str, int]]
     products: dict[str, Product]
+    crypto_wallets: tuple[Wallet, ...]
+    manual_crypto_note_hours: int
 
 
 def load_settings() -> Settings:
@@ -119,21 +124,25 @@ def load_settings() -> Settings:
             key="gpt_plus_nw",
             title={"ru": "ChatGPT Plus NW", "en": "ChatGPT Plus NW", "zh": "ChatGPT Plus NW"},
             price_cents=to_cents(_decimal_env("GPT_PLUS_NW_PRICE_USD", "1.63")),
+            category="plus",
         ),
         "gpt_plus_fw": Product(
             key="gpt_plus_fw",
             title={"ru": "ChatGPT Plus FW", "en": "ChatGPT Plus FW", "zh": "ChatGPT Plus FW"},
             price_cents=to_cents(_decimal_env("GPT_PLUS_FW_PRICE_USD", "3.75")),
+            category="plus",
         ),
         "pro_5x_nw": Product(
             key="pro_5x_nw",
             title={"ru": "GPT Pro/5x NW", "en": "GPT Pro/5x NW", "zh": "GPT Pro/5x NW"},
             price_cents=to_cents(_decimal_env("PRO_5X_NW_PRICE_USD", "20.63")),
+            category="pro",
         ),
         "pro_20x_nw": Product(
             key="pro_20x_nw",
             title={"ru": "GPT Pro/20x NW", "en": "GPT Pro/20x NW", "zh": "GPT Pro/20x NW"},
             price_cents=to_cents(_decimal_env("PRO_20X_NW_PRICE_USD", "41.88")),
+            category="pro",
         ),
     }
     regional_prices = {
@@ -158,6 +167,22 @@ def load_settings() -> Settings:
             "ru": to_cents(_decimal_env("PRO_20X_NW_PRICE_RUB", "3350")),
         },
     }
+
+    # Manual crypto payment: only enabled rows ever reach a buyer. An inline
+    # CRYPTO_WALLETS value wins over the file so the table can live in a
+    # GitHub Actions secret, where there is nothing to point a path at.
+    crypto_wallets = enabled_wallets(
+        load_wallets(
+            getenv("CRYPTO_WALLETS"),
+            getenv("CRYPTO_WALLETS_FILE", str(BASE_DIR / "crypto_wallets.txt")).strip(),
+        )
+    )
+    try:
+        manual_crypto_note_hours = int(getenv("MANUAL_CRYPTO_NOTE_HOURS", "24"))
+    except ValueError as exc:
+        raise RuntimeError("MANUAL_CRYPTO_NOTE_HOURS must be an integer") from exc
+    if manual_crypto_note_hours < 1:
+        raise RuntimeError("MANUAL_CRYPTO_NOTE_HOURS must be at least 1")
 
     return Settings(
         bot_token=bot_token,
@@ -185,6 +210,8 @@ def load_settings() -> Settings:
         currency_rates=currency_rates,
         regional_prices=regional_prices,
         products=products,
+        crypto_wallets=crypto_wallets,
+        manual_crypto_note_hours=manual_crypto_note_hours,
     )
 
 
