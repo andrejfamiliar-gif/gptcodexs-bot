@@ -44,9 +44,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Выберите тип аккаунта Plus:",
     },
     "balance": {
-        "zh": "💰 余额：{balance}\n\n你可以通过 Crypto Pay 充值。",
-        "en": "💰 Balance: {balance}\n\nYou can top up using Crypto Pay.",
-        "ru": "💰 Баланс: {balance}\n\nПополнить баланс можно через Crypto Pay.",
+        "zh": "💰 余额：{balance}\n\n你可以通过 xRocket 充值。",
+        "en": "💰 Balance: {balance}\n\nYou can top up using xRocket.",
+        "ru": "💰 Баланс: {balance}\n\nПополнить баланс можно через xRocket.",
     },
     "top_up": {
         "zh": "💳 选择充值金额：",
@@ -64,14 +64,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Введите корректную сумму, например 2.50.",
     },
     "top_up_invoice": {
-        "zh": "充值账单已创建：{amount}\nCrypto Pay 账单：{usd_amount}\n点击下方按钮完成支付。\n支付成功后余额会自动更新。",
-        "en": "Top-up invoice created: {amount}\nCrypto Pay invoice: {usd_amount}\nTap the button below to pay.\nYour balance will update automatically after payment.",
-        "ru": "Счёт на пополнение создан: {amount}\nСчёт Crypto Pay: {usd_amount}\nНажмите кнопку ниже для оплаты.\nПосле оплаты баланс обновится автоматически.",
+        "zh": "充值账单已创建：{amount}\nxRocket 账单：{usd_amount}\n点击下方按钮完成支付。\n支付成功后余额会自动更新。",
+        "en": "Top-up invoice created: {amount}\nxRocket invoice: {usd_amount}\nTap the button below to pay.\nYour balance will update automatically after payment.",
+        "ru": "Счёт на пополнение создан: {amount}\nСчёт xRocket: {usd_amount}\nНажмите кнопку ниже для оплаты.\nПосле оплаты баланс обновится автоматически.",
     },
     "product_invoice": {
-        "zh": "商品：{product}\n显示价格：{amount}\nCrypto Pay 账单：{usd_amount}\n\n点击下方按钮用加密货币支付。",
-        "en": "Product: {product}\nDisplayed price: {amount}\nCrypto Pay invoice: {usd_amount}\n\nTap the button below to pay with crypto.",
-        "ru": "Товар: {product}\nЦена: {amount}\nСчёт Crypto Pay: {usd_amount}\n\nНажмите кнопку ниже для оплаты криптовалютой.",
+        "zh": "商品：{product}\n显示价格：{amount}\nxRocket 账单：{usd_amount}\n\n点击下方按钮用加密货币支付。",
+        "en": "Product: {product}\nDisplayed price: {amount}\nxRocket invoice: {usd_amount}\n\nTap the button below to pay with crypto.",
+        "ru": "Товар: {product}\nЦена: {amount}\nСчёт xRocket: {usd_amount}\n\nНажмите кнопку ниже для оплаты криптовалютой.",
     },
     "pay": {
         "zh": "💳 支付",
@@ -134,9 +134,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Выберите количество:",
     },
     "queue_invoice": {
-        "zh": "🕒 排队订单\n商品：{product}\n数量：{quantity}\n价格：{amount}\nCrypto Pay 账单：{usd_amount}\n\n点击下方按钮完成付款。账号重新到货后，系统将自动为您发放。",
-        "en": "🕒 Queue order\nProduct: {product}\nQuantity: {quantity}\nPrice: {amount}\nCrypto Pay invoice: {usd_amount}\n\nTap the button below to pay. Once the account is back in stock, the system will automatically deliver it to you.",
-        "ru": "🕒 Заказ в очереди\nТовар: {product}\nКоличество: {quantity}\nЦена: {amount}\nСчёт Crypto Pay: {usd_amount}\n\nНажмите кнопку ниже для оплаты. Когда аккаунт снова появится в наличии, система автоматически выдаст его вам.",
+        "zh": "🕒 排队订单\n商品：{product}\n数量：{quantity}\n价格：{amount}\nxRocket 账单：{usd_amount}\n\n点击下方按钮完成付款。账号重新到货后，系统将自动为您发放。",
+        "en": "🕒 Queue order\nProduct: {product}\nQuantity: {quantity}\nPrice: {amount}\nxRocket invoice: {usd_amount}\n\nTap the button below to pay. Once the account is back in stock, the system will automatically deliver it to you.",
+        "ru": "🕒 Заказ в очереди\nТовар: {product}\nКоличество: {quantity}\nЦена: {amount}\nСчёт xRocket: {usd_amount}\n\nНажмите кнопку ниже для оплаты. Когда аккаунт снова появится в наличии, система автоматически выдаст его вам.",
     },
     "queue_added": {
         "zh": "✅ 已加入等待名单：{product}\n商品到货后我们会自动通知你。",

@@ -6,7 +6,7 @@
 - английский — `English`;
 - русский — `Русский`.
 
-В меню есть GPT Plus с вариантами NW/FW, Pro с вариантами 5x NW/20x NW, баланс с пополнением на 2/5/10 USD или произвольную сумму, проверка наличия, очередь ожидания, приглашение, помощь и смена языка. Цены для русского интерфейса: Plus NW — `200 ₽`, Plus FW — `450 ₽`, Pro 5x NW — `2950 ₽`, Pro 20x NW — `5900 ₽`. Счёт Crypto Pay создаётся в валюте выбранного языка.
+В меню есть GPT Plus с вариантами NW/FW, Pro с вариантами 5x NW/20x NW, баланс с пополнением на 2/5/10 USD или произвольную сумму, проверка наличия, очередь ожидания, приглашение, помощь и смена языка. Цены и валюты задаются в `.env`. Счета создаются через xRocket в выбранном криптоактиве, по умолчанию `USDT`.
 
 Важно: добавляйте только товары и аккаунты, которыми вы владеете и которые разрешено продавать или перепродавать. Не используйте этот проект для украденных, взломанных или скомпрометированных учетных записей.
 
@@ -14,7 +14,7 @@
 
 1. Установите Python 3.11+.
 2. Создайте бота через `@BotFather` и получите `BOT_TOKEN`.
-3. Откройте `@CryptoBot` → `Crypto Pay` → `My Apps` → `Create App` и получите `CRYPTO_PAY_TOKEN`. Для тестов используйте тестовую сеть Crypto Pay.
+3. Получите Bearer API-токен xRocket в настройках xRocket: `Settings` → `Exchange settings` → `API token`. Для тестов используйте testnet xRocket и testnet-токен.
 4. Создайте виртуальное окружение и установите зависимости:
 
 ```powershell
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 python bot.py
 ```
 
-Проект использует polling для Telegram и периодически проверяет оплату через `getInvoices`, поэтому на первом этапе не требуется публичный HTTPS-адрес. Для продакшена можно заменить polling платежей на Crypto Pay webhook.
+Проект использует polling для Telegram и периодически проверяет оплату через `GET /api/v1/invoice?invoiceId={id}`, поэтому на первом этапе не требуется публичный HTTPS-адрес. xRocket также поддерживает callback webhook для invoice, если позже понадобится перейти с polling.
 
 ## Склад и выдача товара
 
@@ -57,10 +57,11 @@ python bot.py
 - проверить контакт поддержки и отображаемую подпись в `SUPPORT_USERNAME`, `SUPPORT_LABEL`, `SUPPORT_LINK`;
 - при необходимости обновить демонстрационные курсы `CNY_PER_USD` и `RUB_PER_USD`;
 - добавить реальные позиции через `/add_good`;
-- проверить правила Telegram, Crypto Bot и соответствующего сервиса для перепродажи цифровых товаров;
+- проверить правила Telegram, xRocket и соответствующего сервиса для перепродажи цифровых товаров;
 - для продакшена вынести базу данных из локального SQLite на резервируемое хранилище и добавить журналирование заказов.
 
 ## Ссылки
 
-- Crypto Pay API: https://help.send.tg/en/articles/10279948-crypto-pay-api
+- xRocket Pay API: https://docs.xrocket.exchange/api/pay/pay-api-overview
+- xRocket Create invoice: https://docs.xrocket.exchange/api/pay/reference/http/invoice-controller-create-invoice
 - BotFather: https://t.me/BotFather
