@@ -38,7 +38,7 @@ class Product:
 @dataclass(frozen=True)
 class Settings:
     bot_token: str
-    xrocket_pay_token: str
+    crypto_pay_token: str
     db_path: str
     support_username: str
     support_label: str
@@ -47,8 +47,8 @@ class Settings:
     privacy_link: str
     admin_ids: tuple[int, ...]
     payment_poll_seconds: int
-    xrocket_pay_base_url: str
-    xrocket_currency: str
+    crypto_pay_base_url: str
+    accepted_assets: str
     telegram_proxy: str | None
     stock_display: dict[str, int]
     decrement_stock_on_payment: bool
@@ -59,12 +59,12 @@ class Settings:
 
 def load_settings() -> Settings:
     bot_token = getenv("BOT_TOKEN", "").strip()
-    xrocket_pay_token = getenv("XROCKET_PAY_TOKEN", "").strip()
+    crypto_pay_token = getenv("CRYPTO_PAY_TOKEN", "").strip()
     if not bot_token:
         raise RuntimeError("BOT_TOKEN is not set. Copy .env.example to .env and fill it in.")
-    if not xrocket_pay_token:
+    if not crypto_pay_token:
         raise RuntimeError(
-            "XROCKET_PAY_TOKEN is not set. Create an API token in xRocket settings first."
+            "CRYPTO_PAY_TOKEN is not set. Create an app in @CryptoBot first."
         )
 
     raw_admin_ids = getenv("ADMIN_IDS", "").strip()
@@ -97,9 +97,12 @@ def load_settings() -> Settings:
         raise RuntimeError("DISPLAY_STOCK_* values must be integers") from exc
     if any(value < 0 for value in stock_display.values()):
         raise RuntimeError("DISPLAY_STOCK_* values cannot be negative")
-    xrocket_currency = getenv("XROCKET_CURRENCY", "USDT").strip().upper()
-    if not xrocket_currency:
-        raise RuntimeError("XROCKET_CURRENCY cannot be empty")
+    accepted_assets = getenv(
+        "CRYPTO_ACCEPTED_ASSETS",
+        "USDT,TON,BTC,ETH,LTC,BNB,TRX,USDC",
+    ).strip()
+    if not accepted_assets:
+        raise RuntimeError("CRYPTO_ACCEPTED_ASSETS cannot be empty")
     decrement_stock_on_payment = getenv("DECREMENT_STOCK_ON_PAYMENT", "false").strip().lower() in {
         "1",
         "true",
@@ -158,7 +161,7 @@ def load_settings() -> Settings:
 
     return Settings(
         bot_token=bot_token,
-        xrocket_pay_token=xrocket_pay_token,
+        crypto_pay_token=crypto_pay_token,
         db_path=db_path,
         support_username=getenv("SUPPORT_USERNAME", "@codexrepIybot").strip() or "@codexrepIybot",
         support_label=getenv("SUPPORT_LABEL", "@admingpt").strip() or "@admingpt",
@@ -174,11 +177,8 @@ def load_settings() -> Settings:
         ).strip(),
         admin_ids=tuple(admin_ids),
         payment_poll_seconds=payment_poll_seconds,
-        xrocket_pay_base_url=getenv(
-            "XROCKET_PAY_BASE_URL",
-            "https://pay.api.xrocket.exchange",
-        ).rstrip("/"),
-        xrocket_currency=xrocket_currency,
+        crypto_pay_base_url=getenv("CRYPTO_PAY_BASE_URL", "https://pay.crypt.bot").rstrip("/"),
+        accepted_assets=accepted_assets,
         telegram_proxy=telegram_proxy,
         stock_display=stock_display,
         decrement_stock_on_payment=decrement_stock_on_payment,

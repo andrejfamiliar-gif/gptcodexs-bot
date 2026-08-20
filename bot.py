@@ -48,7 +48,7 @@ from i18n import (
     t,
     top_up_keyboard,
 )
-from xrocket_pay import XRocketPayClient
+from crypto_pay import CryptoPayClient
 
 
 LOG_DIR = Path("logs")
@@ -69,7 +69,7 @@ router = Router()
 class Runtime:
     settings: Settings
     db: Database
-    payments: XRocketPayClient
+    crypto: CryptoPayClient
 
 
 runtime: Runtime | None = None
@@ -295,10 +295,6 @@ def product_price(settings: Settings, product: Product, language: str) -> str:
     return format_fiat_price(product_amount(settings, product, language), currency_for_language(language))
 
 
-def payment_amount_label(settings: Settings, amount_cents: int) -> str:
-    return f"{amount_cents / 100:.2f} {settings.xrocket_currency}"
-
-
 def product_price_labels(settings: Settings, language: str) -> dict[str, str]:
     return {
         key: product_price(settings, product, language)
@@ -363,12 +359,11 @@ async def create_payment_for_order(
     quantity: int = 1,
     order_type: str = "product",
     balance_amount_cents: int | None = None,
-    invoice_amount_cents: int | None = None,
 ) -> tuple[int, dict[str, object]]:
     rt = get_runtime()
     order_token = secrets.token_urlsafe(18)
-    invoice = await rt.payments.create_invoice(
-        amount_cents=invoice_amount_cents or amount_cents,
+    invoice = await rt.crypto.create_invoice(
+        amount_cents=amount_cents,
         payload=f"order:{order_token}",
         description=description,
         fiat=fiat,
@@ -527,7 +522,7 @@ async def payment_watcher(bot: Bot) -> None:
         try:
             for order in await rt.db.get_pending_orders():
                 try:
-                    invoice = await rt.payments.get_invoice(order["invoice_id"])
+                    invoice = await rt.crypto.get_invoice(order["invoice_id"])
                     if invoice is None:
                         continue
                     if invoice.get("status") == "paid":
@@ -714,7 +709,7 @@ async def send_topup_invoice(message: Message, user_id: int, language: str, amou
             language,
             "top_up_invoice",
             amount=localized_price(rt.settings, language, amount_cents),
-            usd_amount=payment_amount_label(rt.settings, amount_cents),
+            usd_amount=format_usd(amount_cents),
         ),
         reply_markup=payment_keyboard(language, str(invoice["bot_invoice_url"]), order_id),
     )
@@ -804,7 +799,6 @@ async def product_message(
             fiat=fiat,
             quantity=quantity,
             balance_amount_cents=balance_amount_cents,
-            invoice_amount_cents=balance_amount_cents,
         )
     except Exception:
         logger.exception("Could not create product invoice")
@@ -818,7 +812,7 @@ async def product_message(
         "product_invoice",
         product=product.title.get(language, product.key),
         amount=format_fiat_price(total_cents, fiat),
-        usd_amount=payment_amount_label(rt.settings, balance_amount_cents),
+        usd_amount=format_fiat_price(total_cents, fiat),
     )
     if quantity > 1:
         invoice_text = f"{invoice_text}\n{quantity_line(language, quantity)}"
@@ -954,7 +948,6 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
             quantity=quantity,
             order_type="queue",
             balance_amount_cents=balance_amount_cents,
-            invoice_amount_cents=balance_amount_cents,
         )
     except Exception:
         logger.exception("Could not create queue invoice")
@@ -971,7 +964,7 @@ async def queue_quantity_callback(callback: CallbackQuery) -> None:
                     product=html.escape(product_name),
                     quantity=quantity,
                     amount=format_fiat_price(total_cents, fiat),
-                    usd_amount=payment_amount_label(rt.settings, balance_amount_cents),
+                    usd_amount=format_fiat_price(total_cents, fiat),
                 ),
             reply_markup=queue_payment_keyboard(
                 language,
@@ -1056,7 +1049,7 @@ async def check_payment_callback(callback: CallbackQuery, bot: Bot) -> None:
             t(language, "top_up_confirmed" if order["product_key"] == "balance_topup" else "payment_confirmed")
         )
         return
-    invoice = await rt.payments.get_invoice(order["invoice_id"])
+    invoice = await rt.crypto.get_invoice(order["invoice_id"])
     if invoice is None:
         await callback.answer(t(language, "generic_error"), show_alert=True)
         return
@@ -1405,13 +1398,13 @@ async def main() -> None:
     settings = load_settings()
     db = Database(settings.db_path)
     await db.initialize()
-    payments = XRocketPayClient(
-        token=settings.xrocket_pay_token,
-        base_url=settings.xrocket_pay_base_url,
-        currency=settings.xrocket_currency,
+    crypto = CryptoPayClient(
+        token=settings.crypto_pay_token,
+        base_url=settings.crypto_pay_base_url,
+        accepted_assets=settings.accepted_assets,
     )
-    await payments.start()
-    runtime = Runtime(settings=settings, db=db, payments=payments)
+    await crypto.start()
+    runtime = Runtime(settings=settings, db=db, crypto=crypto)
 
     bot = Bot(
         token=settings.bot_token,
@@ -1422,15 +1415,15 @@ async def main() -> None:
     dispatcher.include_router(router)
     watcher = asyncio.create_task(payment_watcher(bot))
     try:
-        xrocket_info = await payments.get_app_info()
-        logger.info("xRocket Pay app connected: %s", xrocket_info.get("name", "unknown"))
+        crypto_info = await crypto.get_me()
+        logger.info("Crypto Pay app connected: %s", crypto_info.get("name", "unknown"))
         logger.info("Starting Telegram polling")
         await dispatcher.start_polling(bot)
     finally:
         watcher.cancel()
         await asyncio.gather(watcher, return_exceptions=True)
         await bot.session.close()
-        await payments.close()
+        await crypto.close()
         await db.close()
         runtime = None
 
