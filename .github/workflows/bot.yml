@@ -21,14 +21,14 @@ jobs:
     timeout-minutes: 305
     env:
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      XROCKET_PAY_TOKEN: ${{ secrets.XROCKET_PAY_TOKEN }}
+      CRYPTO_PAY_TOKEN: ${{ secrets.CRYPTO_PAY_TOKEN }}
       STATE_ENCRYPTION_KEY: ${{ secrets.STATE_ENCRYPTION_KEY }}
       ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
       TELEGRAM_PROXY: ""
       DB_PATH: shop.sqlite3
       PAYMENT_POLL_SECONDS: "15"
-      XROCKET_PAY_BASE_URL: https://pay.api.xrocket.exchange
-      XROCKET_CURRENCY: USDT
+      CRYPTO_PAY_BASE_URL: https://pay.crypt.bot
+      CRYPTO_ACCEPTED_ASSETS: USDT,TON,BTC,ETH,LTC,BNB,TRX,USDC
       SUPPORT_USERNAME: "@codexrepIybot"
       SUPPORT_LABEL: "@admingpt"
       SUPPORT_LINK: https://t.me/codexrepIybot
