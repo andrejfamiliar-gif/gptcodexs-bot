@@ -14,7 +14,15 @@ class XRocketPayClient:
     """Small async client for the xRocket Pay invoice API."""
 
     def __init__(self, token: str, base_url: str, currency: str = "USDT") -> None:
-        self.token = token
+        normalized_token = token.strip()
+        if len(normalized_token) >= 2 and normalized_token[0] == normalized_token[-1] and normalized_token[0] in {
+            "\"",
+            "'",
+        }:
+            normalized_token = normalized_token[1:-1].strip()
+        if normalized_token.lower().startswith("bearer "):
+            normalized_token = normalized_token[7:].strip()
+        self.token = normalized_token
         self.base_url = base_url.rstrip("/")
         self.currency = currency.strip().upper()
         self.session: aiohttp.ClientSession | None = None
