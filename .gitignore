@@ -4,3 +4,8 @@ __pycache__/
 *.py[cod]
 .venv/
 logs/
+
+# Real receive addresses live outside the repository: this repo is public.
+# See crypto_wallets.example.txt for the format and .env.example for the
+# CRYPTO_WALLETS secret used in CI.
+crypto_wallets.txt

@@ -1,0 +1,45 @@
+# Crypto receive-address table — FORMAT EXAMPLE ONLY
+#
+# Copy this to crypto_wallets.txt and fill in your own addresses, or put the
+# same content into the CRYPTO_WALLETS secret. crypto_wallets.txt is gitignored
+# because this repository is public: committing it would publish every address
+# permanently, letting anyone link them together and watch the shop's inflows
+# on-chain.
+#
+# Line format, "|"-separated. Blank lines, "#" comments and "[section]" headers
+# are ignored:
+#
+#     ASSET | NETWORK | ADDRESS | ENABLED
+#
+# ASSET    ticker, upper-cased on load (USDT, TON, BTC, ...).
+# NETWORK  mandatory and shown to the buyer verbatim. A ticker alone is not
+#          payable: USDT on TRC20 and USDT on ERC20 are different addresses,
+#          and sending to the wrong network loses the funds.
+# ADDRESS  the receive address. 20-120 characters, no spaces. Rows with a
+#          placeholder or a malformed address are dropped with a warning —
+#          better one payment option fewer than a broken address.
+# ENABLED  yes/true/1/on makes the row payable. Anything else keeps the row in
+#          the file but hides it from buyers.
+#
+# Duplicate ASSET+NETWORK pairs are collapsed, keeping the first.
+#
+# NEVER put a seed phrase, private key or exchange deposit address in this
+# file. Exchange deposit addresses often require a memo/destination tag, which
+# this flow does not send, so funds sent to one can be lost.
+
+[Stablecoins — the network matters most here]
+USDT | TRC20         | TExampleAddressReplaceMeWithYourOwn | no
+USDT | ERC20         | 0xExampleAddressReplaceMeWithYourOwn0000 | no
+USDT | BEP20 (BSC)   | 0xExampleAddressReplaceMeWithYourOwn0000 | no
+USDT | TON           | UQExampleAddressReplaceMeWithYourOwnAddress | no
+USDC | ERC20         | 0xExampleAddressReplaceMeWithYourOwn0000 | no
+
+[Coins]
+BTC  | Bitcoin       | bc1exampleaddressreplacemewithyourown | no
+ETH  | ERC20         | 0xExampleAddressReplaceMeWithYourOwn0000 | no
+TON  | TON           | UQExampleAddressReplaceMeWithYourOwnAddress | no
+LTC  | Litecoin      | ltc1exampleaddressreplacemewithyourown | no
+
+# Every row above is ENABLED=no, so this example file on its own offers the
+# buyer nothing. Flip a row to yes only after you have checked the address and
+# the network in your own wallet.
