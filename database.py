@@ -524,11 +524,16 @@ class Database:
         order: aiosqlite.Row,
     ) -> list[aiosqlite.Row] | None:
         quantity = max(1, int(order["quantity"] or 1))
+        # RANDOM() rather than id order: the owner loads a batch of interchangeable
+        # accounts and wants them handed out in no particular order. The rows are
+        # distinct by construction, so an order for three units gets three
+        # different accounts, and the status guard in _reserve_goods_for_order
+        # means a row handed to one buyer can never reach another.
         cursor = await connection.execute(
             """
             SELECT id, payload FROM goods
             WHERE product_key = ? AND status = 'available'
-            ORDER BY id
+            ORDER BY RANDOM()
             LIMIT ?
             """,
             (order["product_key"], quantity),
@@ -1065,6 +1070,44 @@ class Database:
                     WHERE id = ? AND user_id = ? AND status = 'awaiting_hash'
                     """,
                     (tx_hash, now, payment_id, user_id),
+                )
+                if cursor.rowcount != 1:
+                    await connection.rollback()
+                    return None
+                row = await self._fetchone(
+                    "SELECT * FROM manual_payments WHERE id = ?",
+                    (payment_id,),
+                )
+                await connection.commit()
+                return row
+            except Exception:
+                await connection.rollback()
+                raise
+
+    async def request_manual_payment_review(
+        self,
+        payment_id: int,
+        user_id: int,
+    ) -> aiosqlite.Row | None:
+        """Hand a transfer to the admins without asking the buyer for a hash.
+
+        The buyer taps "check payment" and the request moves straight to
+        ``pending``. There is no hash to de-duplicate against, so the admin has
+        to locate the transfer by address and amount — that is the trade-off for
+        not making the buyer copy a hash out of their wallet. The guard on
+        ``status = 'awaiting_hash'`` still makes a double tap harmless.
+        """
+        async with self.lock:
+            connection = self._conn()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await connection.execute(
+                    """
+                    UPDATE manual_payments
+                    SET status = 'pending', submitted_at = ?
+                    WHERE id = ? AND user_id = ? AND status = 'awaiting_hash'
+                    """,
+                    (utc_now(), payment_id, user_id),
                 )
                 if cursor.rowcount != 1:
                     await connection.rollback()

@@ -8,11 +8,12 @@ the customer-facing navigation/checkout layer:
 
 * no persistent reply keyboard; every menu is inline;
 * category-first catalogue with blue category buttons;
-* green/red product buttons based on *real* stock;
+* green/red product buttons based on offered stock, which the owner can raise
+  before the accounts themselves are loaded;
 * buy-one and buy-many checkout;
 * three product payment methods: Crypto Bot, direct cryptocurrency, balance;
 * direct cryptocurrency payments are linked to the order and, after an admin
-  verifies the tx hash, the order is paid and delivered automatically.
+  verifies the transfer, the order is paid and delivered automatically.
 
 Run this file instead of ``bot.py``.  The legacy router is still included after
 this router so admin commands and existing support flows continue to work.
@@ -57,167 +58,260 @@ _UI: dict[str, dict[str, str]] = {
         "ru": "👋 <b>Добро пожаловать в магазин!</b>",
         "en": "👋 <b>Welcome to the store!</b>",
         "zh": "👋 <b>欢迎来到商店！</b>",
+        "vi": "👋 <b>Chào mừng đến cửa hàng!</b>",
+        "hi": "👋 <b>दुकान में आपका स्वागत है!</b>",
     },
-    "products": {"ru": "🛒 Товары", "en": "🛒 Products", "zh": "🛒 商品"},
-    "wallet": {"ru": "💳 Кошелёк", "en": "💳 Wallet", "zh": "💳 钱包"},
-    "profile": {"ru": "👤 Профиль", "en": "👤 Profile", "zh": "👤 个人资料"},
-    "referrals": {"ru": "👥 Рефералы", "en": "👥 Referrals", "zh": "👥 邀请"},
-    "support": {"ru": "🆘 Поддержка", "en": "🆘 Support", "zh": "🆘 客服"},
-    "language": {"ru": "🌐 Язык", "en": "🌐 Language", "zh": "🌐 语言"},
-    "terms": {"ru": "📜 Условия", "en": "📜 Terms of Use", "zh": "📜 使用条款"},
-    "home": {"ru": "🏠 Главное меню", "en": "🏠 Main menu", "zh": "🏠 主菜单"},
-    "back": {"ru": "⬅️ Назад", "en": "⬅️ Back", "zh": "⬅️ 返回"},
-    "refresh": {"ru": "🔄 Обновить", "en": "🔄 Refresh", "zh": "🔄 刷新"},
+    "products": {"ru": "🛒 Товары", "en": "🛒 Products", "zh": "🛒 商品", "vi": "🛒 Sản phẩm", "hi": "🛒 उत्पाद"},
+    "wallet": {"ru": "💳 Кошелёк", "en": "💳 Wallet", "zh": "💳 钱包", "vi": "💳 Ví", "hi": "💳 वॉलेट"},
+    "profile": {"ru": "👤 Профиль", "en": "👤 Profile", "zh": "👤 个人资料", "vi": "👤 Hồ sơ", "hi": "👤 प्रोफ़ाइल"},
+    "referrals": {"ru": "👥 Рефералы", "en": "👥 Referrals", "zh": "👥 邀请", "vi": "👥 Giới thiệu", "hi": "👥 रेफ़रल"},
+    "support": {"ru": "🆘 Поддержка", "en": "🆘 Support", "zh": "🆘 客服", "vi": "🆘 Hỗ trợ", "hi": "🆘 सहायता"},
+    "language": {"ru": "🌐 Язык", "en": "🌐 Language", "zh": "🌐 语言", "vi": "🌐 Ngôn ngữ", "hi": "🌐 भाषा"},
+    "terms": {"ru": "📜 Условия", "en": "📜 Terms of Use", "zh": "📜 使用条款", "vi": "📜 Điều khoản", "hi": "📜 नियम"},
+    "home": {"ru": "🏠 Главное меню", "en": "🏠 Main menu", "zh": "🏠 主菜单", "vi": "🏠 Menu chính", "hi": "🏠 मुख्य मेनू"},
+    "back": {"ru": "⬅️ Назад", "en": "⬅️ Back", "zh": "⬅️ 返回", "vi": "⬅️ Quay lại", "hi": "⬅️ वापस"},
+    "refresh": {"ru": "🔄 Обновить", "en": "🔄 Refresh", "zh": "🔄 刷新", "vi": "🔄 Làm mới", "hi": "🔄 रीफ़्रेश"},
     "categories_title": {
         "ru": "🛒 <b>Категории товаров</b>\n\nВыберите категорию:",
         "en": "🛒 <b>Product categories</b>\n\nChoose a category:",
         "zh": "🛒 <b>商品分类</b>\n\n请选择分类：",
+        "vi": "🛒 <b>Danh mục sản phẩm</b>\n\nChọn danh mục:",
+        "hi": "🛒 <b>उत्पाद श्रेणियाँ</b>\n\nएक श्रेणी चुनें:",
     },
     "category_empty": {
         "ru": "В этой категории пока нет товаров.",
         "en": "There are no products in this category yet.",
         "zh": "该分类暂时没有商品。",
+        "vi": "Chưa có sản phẩm nào trong danh mục này.",
+        "hi": "इस श्रेणी में अभी कोई उत्पाद नहीं है।",
     },
-    "stock": {"ru": "Наличие", "en": "Stock", "zh": "库存"},
-    "price": {"ru": "Цена", "en": "Price", "zh": "价格"},
-    "buy_one": {"ru": "🛒 Купить 1", "en": "🛒 Buy 1", "zh": "🛒 购买 1 个"},
+    "stock": {"ru": "Наличие", "en": "Stock", "zh": "库存", "vi": "Tồn kho", "hi": "स्टॉक"},
+    "price": {"ru": "Цена", "en": "Price", "zh": "价格", "vi": "Giá", "hi": "कीमत"},
+    "buy_one": {"ru": "🛒 Купить 1", "en": "🛒 Buy 1", "zh": "🛒 购买 1 个", "vi": "🛒 Mua 1", "hi": "🛒 1 खरीदें"},
     "buy_many": {
         "ru": "📦 Купить несколько",
         "en": "📦 Buy several",
         "zh": "📦 购买多个",
+        "vi": "📦 Mua nhiều",
+        "hi": "📦 कई खरीदें",
     },
     "change_quantity": {
         "ru": "📦 Изменить количество",
         "en": "📦 Change quantity",
         "zh": "📦 修改数量",
+        "vi": "📦 Thay đổi số lượng",
+        "hi": "📦 मात्रा बदलें",
     },
     "out_of_stock": {
         "ru": "🔴 Сейчас товара нет в наличии.",
         "en": "🔴 This product is currently out of stock.",
         "zh": "🔴 当前无库存。",
+        "vi": "🔴 Sản phẩm này hiện đang hết hàng.",
+        "hi": "🔴 यह उत्पाद अभी स्टॉक में नहीं है।",
     },
-    "waitlist": {"ru": "🔔 Уведомить о наличии", "en": "🔔 Notify me", "zh": "🔔 到货提醒"},
+    "waitlist": {"ru": "🔔 Уведомить о наличии", "en": "🔔 Notify me", "zh": "🔔 到货提醒", "vi": "🔔 Thông báo khi có hàng", "hi": "🔔 उपलब्ध होने पर बताएं"},
     "waitlist_added": {
         "ru": "Готово. Сообщу, когда товар появится.",
         "en": "Done. I will notify you when it is available.",
         "zh": "已设置，到货后会通知您。",
+        "vi": "Đã xong. Tôi sẽ thông báo khi có hàng.",
+        "hi": "हो गया। उपलब्ध होने पर सूचित करूँगा।",
     },
     "quantity_prompt": {
         "ru": "Введите количество от 2 до {available}:\n<b>{product}</b>",
         "en": "Enter a quantity from 2 to {available}:\n<b>{product}</b>",
         "zh": "请输入 2 到 {available} 的数量：\n<b>{product}</b>",
+        "vi": "Nhập số lượng từ 2 đến {available}:\n<b>{product}</b>",
+        "hi": "2 से {available} के बीच मात्रा दर्ज करें:\n<b>{product}</b>",
     },
     "quantity_invalid": {
         "ru": "Введите целое число от 2 до {available}.",
         "en": "Enter a whole number from 2 to {available}.",
         "zh": "请输入 2 到 {available} 的整数。",
+        "vi": "Hãy nhập số nguyên từ 2 đến {available}.",
+        "hi": "2 से {available} के बीच पूर्ण संख्या दर्ज करें।",
     },
     "quantity_title": {
         "ru": "📦 <b>Выберите количество</b>\n\n{product}\nВ наличии: <b>{available}</b>",
         "en": "📦 <b>Choose quantity</b>\n\n{product}\nIn stock: <b>{available}</b>",
         "zh": "📦 <b>选择数量</b>\n\n{product}\n库存：<b>{available}</b>",
+        "vi": "📦 <b>Chọn số lượng</b>\n\n{product}\nCòn hàng: <b>{available}</b>",
+        "hi": "📦 <b>मात्रा चुनें</b>\n\n{product}\nस्टॉक में: <b>{available}</b>",
     },
-    "continue_buy": {"ru": "✅ Продолжить", "en": "✅ Continue", "zh": "✅ 继续"},
+    "continue_buy": {"ru": "✅ Продолжить", "en": "✅ Continue", "zh": "✅ 继续", "vi": "✅ Tiếp tục", "hi": "✅ जारी रखें"},
     "checkout_title": {
         "ru": "💳 <b>Выберите способ оплаты</b>",
         "en": "💳 <b>Choose payment method</b>",
         "zh": "💳 <b>选择支付方式</b>",
+        "vi": "💳 <b>Chọn phương thức thanh toán</b>",
+        "hi": "💳 <b>भुगतान विधि चुनें</b>",
     },
-    "crypto_bot": {"ru": "🤖 Crypto Bot", "en": "🤖 Crypto Bot", "zh": "🤖 Crypto Bot"},
+    "crypto_bot": {"ru": "🤖 Crypto Bot", "en": "🤖 Crypto Bot", "zh": "🤖 Crypto Bot", "vi": "🤖 Crypto Bot", "hi": "🤖 Crypto Bot"},
     "cryptocurrency": {
         "ru": "🪙 Cryptocurrency",
         "en": "🪙 Cryptocurrency",
         "zh": "🪙 Cryptocurrency",
+        "vi": "🪙 Cryptocurrency",
+        "hi": "🪙 Cryptocurrency",
     },
-    "balance_pay": {"ru": "💰 Баланс", "en": "💰 Balance", "zh": "💰 余额"},
+    "balance_pay": {"ru": "💰 Баланс", "en": "💰 Balance", "zh": "💰 余额", "vi": "💰 Số dư", "hi": "💰 शेष राशि"},
     "balance_insufficient": {
         "ru": "Недостаточно средств на балансе.",
         "en": "Insufficient balance.",
         "zh": "余额不足。",
+        "vi": "Số dư không đủ.",
+        "hi": "शेष राशि अपर्याप्त है।",
     },
     "choose_coin": {
-        "ru": "🪙 <b>Выберите криптовалюту</b>\n\nК оплате: <b>{usd}</b>",
-        "en": "🪙 <b>Choose cryptocurrency</b>\n\nAmount due: <b>{usd}</b>",
-        "zh": "🪙 <b>选择加密货币</b>\n\n应付：<b>{usd}</b>",
+        "ru": "🪙 <b>Выберите криптовалюту</b>\n\nК оплате: <b>{price}</b>",
+        "en": "🪙 <b>Choose cryptocurrency</b>\n\nAmount due: <b>{price}</b>",
+        "zh": "🪙 <b>选择加密货币</b>\n\n应付：<b>{price}</b>",
+        "vi": "🪙 <b>Chọn tiền điện tử</b>\n\nSố tiền cần thanh toán: <b>{price}</b>",
+        "hi": "🪙 <b>क्रिप्टोकरेंसी चुनें</b>\n\nदेय राशि: <b>{price}</b>",
     },
     "choose_network": {
         "ru": "Выберите сеть для <b>{asset}</b>:",
         "en": "Choose a network for <b>{asset}</b>:",
         "zh": "请选择 <b>{asset}</b> 网络：",
+        "vi": "Chọn mạng cho <b>{asset}</b>:",
+        "hi": "<b>{asset}</b> के लिए नेटवर्क चुनें:",
     },
     "crypto_unavailable": {
         "ru": "Прямая оплата криптовалютой сейчас недоступна.",
         "en": "Direct cryptocurrency payment is currently unavailable.",
         "zh": "当前无法直接使用加密货币支付。",
+        "vi": "Thanh toán trực tiếp bằng tiền điện tử hiện không khả dụng.",
+        "hi": "क्रिप्टोकरेंसी से सीधा भुगतान अभी उपलब्ध नहीं है।",
     },
     "rate_unavailable": {
         "ru": "Не удалось получить актуальный курс этой монеты. Выберите другую валюту или Crypto Bot.",
         "en": "Could not get a current rate for this coin. Choose another coin or Crypto Bot.",
         "zh": "无法获取该币种的当前汇率，请选择其他币种或 Crypto Bot。",
+        "vi": "Không thể lấy tỷ giá hiện tại cho đồng tiền này. Hãy chọn đồng tiền khác hoặc Crypto Bot.",
+        "hi": "इस सिक्के की वर्तमान दर नहीं मिली। कोई अन्य सिक्का या Crypto Bot चुनें।",
     },
     "crypto_instructions": {
         "ru": (
             "🪙 <b>Оплата криптовалютой</b>\n\n"
             "Товар: <b>{product}</b>\n"
             "Количество: <b>{quantity}</b>\n"
-            "Стоимость: <b>{usd}</b>\n\n"
+            "Стоимость: <b>{price}</b>\n\n"
             "Монета: <b>{asset}</b>\n"
             "Сеть: <b>{network}</b>\n"
             "Отправьте ровно: <b>{crypto_amount} {asset}</b>\n"
             "Курс: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
             "Адрес:\n<code>{address}</code>\n\n"
-            "⚠️ Используйте только сеть <b>{network}</b>. После перевода отправьте tx hash. "
+            "⚠️ Используйте только сеть <b>{network}</b>. "
             "После проверки администратором заказ будет оплачен и товар выдастся автоматически."
         ),
         "en": (
             "🪙 <b>Cryptocurrency payment</b>\n\n"
             "Product: <b>{product}</b>\n"
             "Quantity: <b>{quantity}</b>\n"
-            "Price: <b>{usd}</b>\n\n"
+            "Price: <b>{price}</b>\n\n"
             "Coin: <b>{asset}</b>\n"
             "Network: <b>{network}</b>\n"
             "Send exactly: <b>{crypto_amount} {asset}</b>\n"
             "Rate: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
             "Address:\n<code>{address}</code>\n\n"
-            "⚠️ Use only the <b>{network}</b> network. Submit the tx hash after sending. "
-            "Once an admin verifies it, the order is paid and delivered automatically."
+            "⚠️ Use only the <b>{network}</b> network. "
+            "Once an admin verifies the transfer, the order is paid and delivered automatically."
         ),
         "zh": (
             "🪙 <b>加密货币支付</b>\n\n"
             "商品：<b>{product}</b>\n"
             "数量：<b>{quantity}</b>\n"
-            "价格：<b>{usd}</b>\n\n"
+            "价格：<b>{price}</b>\n\n"
             "币种：<b>{asset}</b>\n"
             "网络：<b>{network}</b>\n"
             "请准确发送：<b>{crypto_amount} {asset}</b>\n"
             "汇率：1 {asset} = ${rate}（{rate_at} UTC）\n\n"
             "地址：\n<code>{address}</code>\n\n"
-            "⚠️ 仅使用 <b>{network}</b> 网络。转账后请提交 tx hash。"
+            "⚠️ 仅使用 <b>{network}</b> 网络。"
             "管理员核验后订单会自动付款并发货。"
+        ),
+        "vi": (
+            "🪙 <b>Thanh toán bằng tiền điện tử</b>\n\n"
+            "Sản phẩm: <b>{product}</b>\n"
+            "Số lượng: <b>{quantity}</b>\n"
+            "Giá: <b>{price}</b>\n\n"
+            "Đồng tiền: <b>{asset}</b>\n"
+            "Mạng: <b>{network}</b>\n"
+            "Gửi đúng: <b>{crypto_amount} {asset}</b>\n"
+            "Tỷ giá: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
+            "Địa chỉ:\n<code>{address}</code>\n\n"
+            "⚠️ Chỉ sử dụng mạng <b>{network}</b>. "
+            "Sau khi admin xác nhận, đơn hàng sẽ được thanh toán và giao hàng tự động."
+        ),
+        "hi": (
+            "🪙 <b>क्रिप्टोकरेंसी भुगतान</b>\n\n"
+            "उत्पाद: <b>{product}</b>\n"
+            "मात्रा: <b>{quantity}</b>\n"
+            "मूल्य: <b>{price}</b>\n\n"
+            "सिक्का: <b>{asset}</b>\n"
+            "नेटवर्क: <b>{network}</b>\n"
+            "बिल्कुल भेजें: <b>{crypto_amount} {asset}</b>\n"
+            "दर: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
+            "पता:\n<code>{address}</code>\n\n"
+            "⚠️ केवल <b>{network}</b> नेटवर्क का उपयोग करें। "
+            "एडमिन द्वारा सत्यापन के बाद ऑर्डर स्वचालित रूप से पूरा हो जाएगा।"
         ),
     },
     "invoice_created": {
         "ru": "🤖 <b>Счёт Crypto Bot создан</b>\n\n{product} × {quantity}\nК оплате: <b>{amount}</b>",
         "en": "🤖 <b>Crypto Bot invoice created</b>\n\n{product} × {quantity}\nAmount: <b>{amount}</b>",
         "zh": "🤖 <b>Crypto Bot 账单已创建</b>\n\n{product} × {quantity}\n金额：<b>{amount}</b>",
+        "vi": "🤖 <b>Đã tạo hóa đơn Crypto Bot</b>\n\n{product} × {quantity}\nSố tiền: <b>{amount}</b>",
+        "hi": "🤖 <b>Crypto Bot इनवॉइस बनाया गया</b>\n\n{product} × {quantity}\nराशि: <b>{amount}</b>",
     },
-    "open_invoice": {"ru": "💳 Открыть Crypto Bot", "en": "💳 Open Crypto Bot", "zh": "💳 打开 Crypto Bot"},
-    "check_payment": {"ru": "🔄 Проверить оплату", "en": "🔄 Check payment", "zh": "🔄 检查付款"},
-    "payment_pending": {"ru": "Платёж пока не получен.", "en": "Payment has not arrived yet.", "zh": "尚未收到付款。"},
-    "payment_done": {"ru": "✅ Оплата подтверждена.", "en": "✅ Payment confirmed.", "zh": "✅ 付款已确认。"},
-    "payment_expired": {"ru": "Счёт истёк.", "en": "The invoice has expired.", "zh": "账单已过期。"},
-    "order_not_found": {"ru": "Заказ не найден.", "en": "Order not found.", "zh": "未找到订单。"},
+    "open_invoice": {"ru": "💳 Открыть Crypto Bot", "en": "💳 Open Crypto Bot", "zh": "💳 打开 Crypto Bot", "vi": "💳 Mở Crypto Bot", "hi": "💳 Crypto Bot खोलें"},
+    "check_payment": {"ru": "🔄 Проверить оплату", "en": "🔄 Check payment", "zh": "🔄 检查付款", "vi": "🔄 Kiểm tra thanh toán", "hi": "🔄 भुगतान जाँचें"},
+    "payment_pending": {"ru": "Платёж пока не получен.", "en": "Payment has not arrived yet.", "zh": "尚未收到付款。", "vi": "Thanh toán chưa đến.", "hi": "भुगतान अभी तक नहीं आया।"},
+    "payment_done": {"ru": "✅ Оплата подтверждена.", "en": "✅ Payment confirmed.", "zh": "✅ 付款已确认。", "vi": "✅ Thanh toán đã xác nhận.", "hi": "✅ भुगतान की पुष्टि हो गई।"},
+    "payment_expired": {"ru": "Счёт истёк.", "en": "The invoice has expired.", "zh": "账单已过期。", "vi": "Hóa đơn đã hết hạn.", "hi": "इनवॉइस समाप्त हो गया।"},
+    "order_not_found": {"ru": "Заказ не найден.", "en": "Order not found.", "zh": "未找到订单。", "vi": "Không tìm thấy đơn hàng.", "hi": "ऑर्डर नहीं मिला।"},
     "direct_confirmed": {
         "ru": "✅ Перевод подтверждён. Заказ оплачен; товар будет отправлен автоматически.",
         "en": "✅ Transfer confirmed. The order is paid and will be delivered automatically.",
         "zh": "✅ 转账已确认，订单已付款并会自动发货。",
+        "vi": "✅ Chuyển khoản đã xác nhận. Đơn hàng đã thanh toán và sẽ được giao tự động.",
+        "hi": "✅ ट्रांसफर की पुष्टि हो गई। ऑर्डर का भुगतान हो गया और स्वचालित रूप से डिलीवर होगा।",
     },
     "direct_rejected": {
         "ru": "❌ Перевод не подтверждён. Если это ошибка, свяжитесь с поддержкой.",
         "en": "❌ Transfer was not confirmed. Contact support if this is a mistake.",
         "zh": "❌ 转账未确认，如有疑问请联系客服。",
+        "vi": "❌ Chuyển khoản không được xác nhận. Liên hệ hỗ trợ nếu đây là lỗi.",
+        "hi": "❌ ट्रांसफर की पुष्टि नहीं हुई। यदि यह गलती है तो सहायता से संपर्क करें।",
     },
+    # Field labels for the home and profile cards. Short, but a buyer who chose
+    # Hindi should not be reading "Notifications: ON".
+    "label_name": {"ru": "Имя", "en": "Name", "zh": "姓名", "vi": "Tên", "hi": "नाम"},
+    "label_username": {"ru": "Юзернейм", "en": "Username", "zh": "用户名", "vi": "Tên người dùng", "hi": "यूज़रनेम"},
+    "label_users": {"ru": "Пользователей", "en": "Users", "zh": "用户数", "vi": "Người dùng", "hi": "उपयोगकर्ता"},
+    "label_balance": {"ru": "Баланс", "en": "Balance", "zh": "余额", "vi": "Số dư", "hi": "शेष राशि"},
+    "label_language": {"ru": "Язык", "en": "Language", "zh": "语言", "vi": "Ngôn ngữ", "hi": "भाषा"},
+    "label_notifications": {
+        "ru": "Уведомления",
+        "en": "Notifications",
+        "zh": "通知",
+        "vi": "Thông báo",
+        "hi": "सूचनाएँ",
+    },
+    "state_on": {"ru": "включены", "en": "on", "zh": "已开启", "vi": "bật", "hi": "चालू"},
+    "state_off": {"ru": "выключены", "en": "off", "zh": "已关闭", "vi": "tắt", "hi": "बंद"},
 }
+
+# The same guard i18n.py uses: a missing translation here would silently serve
+# English to a buyer who picked Vietnamese, which is the kind of bug nobody
+# reports. Failing at import means it is found before the bot starts.
+_missing = {
+    code: sorted(key for key, row in _UI.items() if code not in row)
+    for code in legacy.LANGUAGES
+}
+_missing = {code: keys for code, keys in _missing.items() if keys}
+if _missing:
+    raise RuntimeError(f"bot_v2 UI is missing translations: {_missing}")
 
 
 def ui(language: str, key: str, **kwargs: object) -> str:
@@ -228,6 +322,26 @@ def ui(language: str, key: str, **kwargs: object) -> str:
 
 def _fmt_usd(cents: int) -> str:
     return f"${cents / 100:.2f}"
+
+
+def order_local_price(order, language: str) -> str:
+    """An order's total in the buyer's own currency.
+
+    The order stores USD cents, but the buyer was shown a local price at
+    checkout and has to keep seeing the same figure. Where the product still
+    exists its pinned regional price wins, so ₽130 does not become ₽130,40 on
+    the next screen; an order for a deleted product falls back to conversion.
+    """
+    settings = legacy.get_runtime().settings
+    usd_cents = int(order["balance_amount_cents"] or order["amount_cents"])
+    product = settings.products.get(str(order["product_key"]))
+    if product is None:
+        return legacy.localized_price(settings, language, usd_cents)
+    quantity = max(int(order["quantity"] or 1), 1)
+    return legacy.format_fiat_price(
+        legacy.product_amount(settings, product, language) * quantity,
+        legacy.currency_for_language(language),
+    )
 
 
 def _safe_category(raw: str) -> str:
@@ -438,6 +552,13 @@ def checkout_keyboard(
     required_balance_cents: int,
 ) -> InlineKeyboardMarkup:
     balance_style = ButtonStyle.SUCCESS if balance_cents >= required_balance_cents else ButtonStyle.DANGER
+    # The balance on the button has to match the balance in the message above it,
+    # so it is rendered in the buyer's currency rather than in dollars.
+    balance_label = legacy.localized_price(
+        legacy.get_runtime().settings,
+        language,
+        balance_cents,
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -456,7 +577,7 @@ def checkout_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text=f"{ui(language, 'balance_pay')} · {_fmt_usd(balance_cents)}",
+                    text=f"{ui(language, 'balance_pay')} · {balance_label}",
                     callback_data=f"shop:pay_balance:{product_key}:{quantity}",
                     style=balance_style,
                 )
@@ -541,10 +662,10 @@ async def home_text(user: User, language: str) -> str:
     return (
         f"{ui(language, 'home_title')}\n\n"
         f"🆔 ID: <code>{user.id}</code>\n"
-        f"👤 Name: {name}\n"
-        f"🔗 Username: {username}\n"
-        f"👥 Users: {total_users}\n"
-        f"💰 Balance: <b>{_fmt_usd(balance)}</b>"
+        f"👤 {ui(language, 'label_name')}: {name}\n"
+        f"🔗 {ui(language, 'label_username')}: {username}\n"
+        f"👥 {ui(language, 'label_users')}: {total_users}\n"
+        f"💰 {ui(language, 'label_balance')}: <b>{legacy.localized_price(rt.settings, language, balance)}</b>"
     )
 
 
@@ -562,7 +683,15 @@ async def show_home_callback(callback: CallbackQuery, language: str) -> None:
 
 
 async def actual_stock_for(product_key: str) -> int:
-    return int((await legacy.get_runtime().db.actual_stock()).get(product_key, 0))
+    """How many units the storefront offers for this product.
+
+    ``available_stock`` is ``max(display_stock, real_stock)``, so the owner can
+    put a product on sale by raising the display counter before the accounts
+    themselves are loaded. A buyer who pays for a unit that has no credential
+    behind it yet does not lose it: the order parks in ``waiting_stock`` and
+    ``deliver_pending_orders`` hands it over as soon as stock is loaded.
+    """
+    return int((await legacy.get_runtime().db.available_stock()).get(product_key, 0))
 
 
 async def render_product(callback: CallbackQuery, language: str, product_key: str) -> None:
@@ -605,7 +734,8 @@ async def render_checkout(callback: CallbackQuery, language: str, product_key: s
         f"📦 {html.escape(product.title.get(language, product.key))}\n"
         f"🔢 × {quantity}\n"
         f"💵 <b>{local_price}</b>{usd_line}\n"
-        f"💰 Balance: <b>{_fmt_usd(balance)}</b>"
+        f"💰 {ui(language, 'label_balance')}: "
+        f"<b>{legacy.localized_price(rt.settings, language, balance)}</b>"
     )
     await edit_or_send(
         callback,
@@ -718,10 +848,8 @@ async def settle_paid_order_v2(bot: Bot, order_id: int) -> dict[str, object] | N
         await legacy.broadcast_purchase_notification(bot, settlement)
     if settlement is not None and settlement["delivery_status"] == "waiting_stock":
         language = await rt.db.get_language(int(settlement["user_id"])) or "en"
-        await bot.send_message(
-            int(settlement["user_id"]),
-            legacy.t(language, "no_stock_after_payment", support=legacy.support_contact(rt.settings)),
-        )
+        await bot.send_message(int(settlement["user_id"]), legacy.preorder_notice(language))
+        await legacy.notify_admins_waiting_stock(bot, settlement)
     await legacy.deliver_pending_orders(bot)
     return settlement
 
@@ -1052,10 +1180,12 @@ async def profile_callback(callback: CallbackQuery) -> None:
     text = (
         f"👤 <b>{ui(language, 'profile').split(' ', 1)[-1]}</b>\n\n"
         f"ID: <code>{callback.from_user.id}</code>\n"
-        f"Username: {username}\n"
-        f"Language: {language.upper()}\n"
-        f"Balance: <b>{_fmt_usd(balance)}</b>\n"
-        f"Notifications: {'ON' if notify else 'OFF'}"
+        f"{ui(language, 'label_username')}: {username}\n"
+        f"{ui(language, 'label_language')}: {language.upper()}\n"
+        f"{ui(language, 'label_balance')}: "
+        f"<b>{legacy.localized_price(rt.settings, language, balance)}</b>\n"
+        f"{ui(language, 'label_notifications')}: "
+        f"{ui(language, 'state_on') if notify else ui(language, 'state_off')}"
     )
     await callback.answer()
     await edit_or_send(
@@ -1324,10 +1454,14 @@ async def pay_crypto_callback(callback: CallbackQuery) -> None:
         quantity,
         base_total,
     )
+    local_total = legacy.format_fiat_price(
+        legacy.product_amount(rt.settings, product, language) * quantity,
+        legacy.currency_for_language(language),
+    )
     await callback.answer()
     await edit_or_send(
         callback,
-        ui(language, "choose_coin", usd=_fmt_usd(base_total)),
+        ui(language, "choose_coin", price=local_total),
         crypto_assets_keyboard(language, order_id),
     )
 
@@ -1350,7 +1484,7 @@ async def crypto_assets_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     await edit_or_send(
         callback,
-        ui(language, "choose_coin", usd=_fmt_usd(int(order["balance_amount_cents"] or order["amount_cents"]))),
+        ui(language, "choose_coin", price=order_local_price(order, language)),
         crypto_assets_keyboard(language, order_id),
     )
 
@@ -1469,7 +1603,7 @@ async def create_direct_crypto_payment(
         "crypto_instructions",
         product=html.escape(product_name),
         quantity=int(order["quantity"] or 1),
-        usd=_fmt_usd(amount_usd_cents),
+        price=order_local_price(order, language),
         asset=html.escape(wallet.asset),
         network=html.escape(wallet.network),
         crypto_amount=html.escape(crypto_amount),
@@ -1591,10 +1725,8 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
             await legacy.notify_admins_payment(bot, settlement)
             await legacy.broadcast_purchase_notification(bot, settlement)
             if settlement.get("delivery_status") == "waiting_stock":
-                await bot.send_message(
-                    user_id,
-                    legacy.t(language, "no_stock_after_payment", support=legacy.support_contact(rt.settings)),
-                )
+                await bot.send_message(user_id, legacy.preorder_notice(language))
+                await legacy.notify_admins_waiting_stock(bot, settlement)
             await legacy.deliver_pending_orders(bot)
     elif not approve and order_id is not None:
         await cancel_non_invoice_order(order_id, user_id)
