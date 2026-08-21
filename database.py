@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -37,12 +38,19 @@ class Database:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS products (
                 product_key TEXT PRIMARY KEY,
                 category TEXT NOT NULL DEFAULT 'catalog',
                 title_ru TEXT NOT NULL,
                 title_en TEXT NOT NULL,
                 title_zh TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
                 price_usd_cents INTEGER NOT NULL,
                 price_rub_cents INTEGER NOT NULL,
                 price_cny_cents INTEGER NOT NULL,
@@ -66,6 +74,7 @@ class Database:
 
             CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_number INTEGER UNIQUE,
                 user_id INTEGER NOT NULL,
                 product_key TEXT NOT NULL,
                 amount_cents INTEGER NOT NULL,
@@ -145,6 +154,7 @@ class Database:
             -- and confirms it, which is what moves it to 'confirmed'.
             CREATE TABLE IF NOT EXISTS manual_payments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_number INTEGER UNIQUE,
                 user_id INTEGER NOT NULL,
                 asset TEXT NOT NULL,
                 network TEXT NOT NULL,
@@ -193,6 +203,7 @@ class Database:
 
             CREATE TABLE IF NOT EXISTS support_tickets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_number INTEGER UNIQUE,
                 user_id INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'open',
                 created_at TEXT NOT NULL,
@@ -233,6 +244,10 @@ class Database:
             await self.connection.execute(
                 "ALTER TABLE products ADD COLUMN discount_percent INTEGER NOT NULL DEFAULT 0"
             )
+        if "description" not in product_columns:
+            await self.connection.execute(
+                "ALTER TABLE products ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+            )
         if "quantity" not in order_columns:
             await self.connection.execute(
                 "ALTER TABLE orders ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1"
@@ -249,6 +264,36 @@ class Database:
             await self.connection.execute(
                 "ALTER TABLE orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'product'"
             )
+        manual_payment_columns = {
+            str(row["name"]) for row in await self._fetchall("PRAGMA table_info(manual_payments)")
+        }
+        ticket_columns = {
+            str(row["name"]) for row in await self._fetchall("PRAGMA table_info(support_tickets)")
+        }
+        if "public_number" not in order_columns:
+            await self.connection.execute("ALTER TABLE orders ADD COLUMN public_number INTEGER")
+        if "public_number" not in manual_payment_columns:
+            await self.connection.execute("ALTER TABLE manual_payments ADD COLUMN public_number INTEGER")
+        if "public_number" not in ticket_columns:
+            await self.connection.execute("ALTER TABLE support_tickets ADD COLUMN public_number INTEGER")
+        await self._backfill_public_numbers("orders")
+        await self._backfill_public_numbers("manual_payments")
+        await self._backfill_public_numbers("support_tickets")
+        now = utc_now()
+        await self.connection.execute(
+            """
+            INSERT OR IGNORE INTO app_settings(key, value, updated_at)
+            VALUES ('stats_reset_at', ?, ?)
+            """,
+            (now, now),
+        )
+        await self.connection.execute(
+            """
+            INSERT OR IGNORE INTO app_settings(key, value, updated_at)
+            VALUES ('purchase_notifications_global', '1', ?)
+            """,
+            (now,),
+        )
         await self.connection.commit()
 
     async def close(self) -> None:
@@ -274,6 +319,86 @@ class Database:
             return await cursor.fetchall()
         finally:
             await cursor.close()
+
+    async def _allocate_public_number(self, table: str) -> int:
+        """Return an unused five-digit number for a customer-facing reference."""
+        if table not in {"orders", "manual_payments", "support_tickets"}:
+            raise ValueError("unsupported public-number table")
+        for _ in range(100):
+            candidate = secrets.randbelow(90_000) + 10_000
+            used = False
+            for existing_table in ("orders", "manual_payments", "support_tickets"):
+                row = await self._fetchone(
+                    f"SELECT 1 FROM {existing_table} WHERE public_number = ? LIMIT 1",
+                    (candidate,),
+                )
+                if row is not None:
+                    used = True
+                    break
+            if not used:
+                return candidate
+        raise RuntimeError(f"could not allocate a public number for {table}")
+
+    async def _backfill_public_numbers(self, table: str) -> None:
+        if table not in {"orders", "manual_payments", "support_tickets"}:
+            raise ValueError("unsupported public-number table")
+        rows = await self._fetchall(
+            f"SELECT id FROM {table} WHERE public_number IS NULL ORDER BY id"
+        )
+        for row in rows:
+            number = await self._allocate_public_number(table)
+            await self._conn().execute(
+                f"UPDATE {table} SET public_number = ? WHERE id = ? AND public_number IS NULL",
+                (number, int(row["id"])),
+            )
+        await self._conn().execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_public_number ON {table}(public_number)"
+        )
+
+    @staticmethod
+    def _user_exclusion(
+        column: str,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> tuple[str, tuple[int, ...]]:
+        ids = tuple(dict.fromkeys(int(user_id) for user_id in excluded_user_ids))
+        if not ids:
+            return "", ()
+        placeholders = ", ".join("?" for _ in ids)
+        return f" AND {column} NOT IN ({placeholders})", ids
+
+    async def _get_app_setting(self, key: str, default: str) -> str:
+        row = await self._fetchone(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        )
+        return str(row["value"]) if row is not None else default
+
+    async def _set_app_setting(self, key: str, value: str) -> None:
+        async with self.lock:
+            await self._conn().execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                """,
+                (key, value, utc_now()),
+            )
+            await self._conn().commit()
+
+    async def get_stats_reset_at(self) -> str | None:
+        value = await self._get_app_setting("stats_reset_at", "")
+        return value or None
+
+    async def reset_statistics(self) -> str:
+        now = utc_now()
+        await self._set_app_setting("stats_reset_at", now)
+        return now
+
+    async def get_purchase_notifications_global(self) -> bool:
+        return (await self._get_app_setting("purchase_notifications_global", "1")) == "1"
+
+    async def set_purchase_notifications_global(self, enabled: bool) -> None:
+        await self._set_app_setting("purchase_notifications_global", "1" if enabled else "0")
 
     async def ensure_product_catalog(
         self,
@@ -302,10 +427,10 @@ class Database:
                 await self._conn().execute(
                     """
                     INSERT OR IGNORE INTO products(
-                        product_key, category, title_ru, title_en, title_zh,
+                        product_key, category, title_ru, title_en, title_zh, description,
                         price_usd_cents, price_rub_cents, price_cny_cents,
                         display_stock, enabled, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         key,
@@ -313,6 +438,7 @@ class Database:
                         product.title.get("ru", key),
                         product.title.get("en", key),
                         product.title.get("zh", key),
+                        str(getattr(product, "description", "") or "").strip(),
                         int(prices.get("en", product.price_cents)),
                         int(prices.get("ru", product.price_cents)),
                         int(prices.get("zh", product.price_cents)),
@@ -327,7 +453,7 @@ class Database:
         where = "WHERE enabled = 1" if enabled_only else ""
         return await self._fetchall(
             f"""
-            SELECT product_key, category, title_ru, title_en, title_zh,
+            SELECT product_key, category, title_ru, title_en, title_zh, description,
                    price_usd_cents, price_rub_cents, price_cny_cents,
                    discount_percent,
                    display_stock, enabled, created_at, updated_at
@@ -347,9 +473,13 @@ class Database:
         price_usd_cents: int,
         price_rub_cents: int,
         price_cny_cents: int,
+        description: str = "",
     ) -> bool:
         if min(price_usd_cents, price_rub_cents, price_cny_cents) <= 0:
             raise ValueError("product prices must be positive")
+        description = description.strip()
+        if len(description) > 2000:
+            raise ValueError("product description must be 2000 characters or shorter")
         now = utc_now()
         async with self.lock:
             await self._conn().execute(
@@ -373,6 +503,7 @@ class Database:
                     """
                     UPDATE products
                     SET category = ?, title_ru = ?, title_en = ?, title_zh = ?,
+                        description = ?,
                         price_usd_cents = ?, price_rub_cents = ?, price_cny_cents = ?,
                         discount_percent = 0, display_stock = 0, enabled = 1, updated_at = ?
                     WHERE product_key = ?
@@ -382,6 +513,7 @@ class Database:
                         title_ru,
                         title_en,
                         title_zh,
+                        description,
                         price_usd_cents,
                         price_rub_cents,
                         price_cny_cents,
@@ -394,10 +526,10 @@ class Database:
             cursor = await self._conn().execute(
                 """
                 INSERT OR IGNORE INTO products(
-                    product_key, category, title_ru, title_en, title_zh,
+                    product_key, category, title_ru, title_en, title_zh, description,
                     price_usd_cents, price_rub_cents, price_cny_cents,
                     discount_percent, display_stock, enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?, ?)
                 """,
                 (
                     product_key,
@@ -405,6 +537,7 @@ class Database:
                     title_ru,
                     title_en,
                     title_zh,
+                    description,
                     price_usd_cents,
                     price_rub_cents,
                     price_cny_cents,
@@ -475,6 +608,22 @@ class Database:
             await self._conn().commit()
             return cursor.rowcount == 1
 
+    async def update_product_description(self, product_key: str, description: str) -> bool:
+        description = description.strip()
+        if len(description) > 2000:
+            raise ValueError("product description must be 2000 characters or shorter")
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE products
+                SET description = ?, updated_at = ?
+                WHERE product_key = ? AND enabled = 1
+                """,
+                (description, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
     async def adjust_display_stock(self, product_key: str, delta: int) -> tuple[int, int] | None:
         async with self.lock:
             row = await self._fetchone(
@@ -526,6 +675,8 @@ class Database:
         )
 
     async def list_purchase_notification_users(self) -> list[aiosqlite.Row]:
+        if not await self.get_purchase_notifications_global():
+            return []
         return await self._fetchall(
             """
             SELECT user_id, username, language
@@ -547,12 +698,13 @@ class Database:
             raise ValueError("support ticket message cannot be empty")
         async with self.lock:
             now = utc_now()
+            public_number = await self._allocate_public_number("support_tickets")
             cursor = await self._conn().execute(
                 """
-                INSERT INTO support_tickets(user_id, status, created_at, updated_at)
-                VALUES (?, 'open', ?, ?)
+                INSERT INTO support_tickets(public_number, user_id, status, created_at, updated_at)
+                VALUES (?, ?, 'open', ?, ?)
                 """,
-                (user_id, now, now),
+                (public_number, user_id, now, now),
             )
             ticket_id = int(cursor.lastrowid)
             await self._conn().execute(
@@ -568,7 +720,7 @@ class Database:
     async def get_support_ticket(self, ticket_id: int) -> aiosqlite.Row | None:
         return await self._fetchone(
             """
-            SELECT t.id, t.user_id, t.status, t.created_at, t.updated_at,
+            SELECT t.id, t.public_number, t.user_id, t.status, t.created_at, t.updated_at,
                    u.username, u.language
             FROM support_tickets t
             LEFT JOIN users u ON u.user_id = t.user_id
@@ -585,7 +737,7 @@ class Database:
     ) -> list[aiosqlite.Row]:
         return await self._fetchall(
             """
-            SELECT t.id, t.user_id, t.status, t.created_at, t.updated_at,
+            SELECT t.id, t.public_number, t.user_id, t.status, t.created_at, t.updated_at,
                    u.username, u.language,
                    (
                        SELECT body FROM support_messages sm
@@ -601,10 +753,18 @@ class Database:
             (status, max(1, min(limit, 100)), max(0, offset)),
         )
 
-    async def count_support_tickets(self, status: str = "open") -> int:
+    async def count_support_tickets(
+        self,
+        status: str = "open",
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> int:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND created_at >= ?" if since else ""
+        params = (status,) + user_params + ((since,) if since else ())
         row = await self._fetchone(
-            "SELECT COUNT(*) AS total FROM support_tickets WHERE status = ?",
-            (status,),
+            f"SELECT COUNT(*) AS total FROM support_tickets WHERE status = ?{user_filter}{date_filter}",
+            params,
         )
         return int(row["total"]) if row is not None else 0
 
@@ -655,7 +815,7 @@ class Database:
     async def close_support_ticket(self, ticket_id: int) -> aiosqlite.Row | None:
         async with self.lock:
             row = await self._fetchone(
-                "SELECT id, user_id, status FROM support_tickets WHERE id = ?",
+                "SELECT id, public_number, user_id, status FROM support_tickets WHERE id = ?",
                 (ticket_id,),
             )
             if row is None or str(row["status"]) == "closed":
@@ -720,8 +880,18 @@ class Database:
             (user_id,),
         )
 
-    async def count_users(self) -> int:
-        row = await self._fetchone("SELECT COUNT(*) AS count FROM users")
+    async def count_users(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> int:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND created_at >= ?" if since else ""
+        params = user_params + ((since,) if since else ())
+        row = await self._fetchone(
+            f"SELECT COUNT(*) AS count FROM users WHERE 1 = 1{user_filter}{date_filter}",
+            params,
+        )
         return int(row["count"]) if row is not None else 0
 
     async def list_users(self, limit: int, offset: int = 0) -> list[aiosqlite.Row]:
@@ -781,16 +951,18 @@ class Database:
         if balance_amount_cents is not None and balance_amount_cents < 0:
             raise ValueError("balance_amount_cents cannot be negative")
         async with self.lock:
+            public_number = await self._allocate_public_number("orders")
             cursor = await self._conn().execute(
                 """
                 INSERT INTO orders(
-                    user_id, product_key, amount_cents, balance_amount_cents,
+                    public_number, user_id, product_key, amount_cents, balance_amount_cents,
                     quantity, currency, order_type,
                     order_token, invoice_id, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    public_number,
                     user_id,
                     product_key,
                     amount_cents,
@@ -1361,15 +1533,17 @@ class Database:
         if amount_cents <= 0:
             raise ValueError("amount_cents must be positive")
         async with self.lock:
+            public_number = await self._allocate_public_number("manual_payments")
             cursor = await self._conn().execute(
                 """
                 INSERT INTO manual_payments(
-                    user_id, asset, network, address, amount_cents, currency,
+                    public_number, user_id, asset, network, address, amount_cents, currency,
                     crypto_amount, rate, rate_at, status, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_hash', ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'awaiting_hash', ?)
                 """,
                 (
+                    public_number,
                     user_id,
                     asset,
                     network,
@@ -1773,10 +1947,16 @@ class Database:
         except Exception:
             pass
 
-    async def event_counts(self, since: str | None = None) -> dict[str, tuple[int, int]]:
+    async def event_counts(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> dict[str, tuple[int, int]]:
         """Per event: how many times it happened and how many distinct people."""
-        where = "WHERE created_at >= ?" if since else ""
-        params: tuple[Any, ...] = (since,) if since else ()
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND created_at >= ?" if since else ""
+        where = "WHERE 1 = 1" + user_filter + date_filter
+        params = user_params + ((since,) if since else ())
         rows = await self._fetchall(
             f"""
             SELECT event, COUNT(*) AS total, COUNT(DISTINCT user_id) AS people
@@ -1788,32 +1968,42 @@ class Database:
         )
         return {str(row["event"]): (int(row["total"]), int(row["people"])) for row in rows}
 
-    async def order_stats(self) -> dict[str, int]:
+    async def order_stats(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> dict[str, int]:
         """Paid orders, units and revenue in USD cents, plus what is waiting."""
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        paid_filter = " AND paid_at >= ?" if since else ""
+        paid_params = user_params + ((since,) if since else ())
         row = await self._fetchone(
-            """
+            f"""
             SELECT
                 COUNT(*) AS paid_orders,
                 COALESCE(SUM(quantity), 0) AS units,
                 COALESCE(SUM(COALESCE(balance_amount_cents, amount_cents)), 0) AS revenue,
                 COUNT(DISTINCT user_id) AS buyers
             FROM orders
-            WHERE status = 'paid' AND order_type = 'product'
-            """
+            WHERE status = 'paid' AND order_type = 'product'{user_filter}{paid_filter}
+            """,
+            paid_params,
         )
         waiting = await self._fetchone(
-            """
+            f"""
             SELECT COUNT(*) AS total FROM orders
-            WHERE status = 'paid' AND delivery_status = 'waiting_stock'
-            """
+            WHERE status = 'paid' AND delivery_status = 'waiting_stock'{user_filter}{paid_filter}
+            """,
+            paid_params,
         )
         topups = await self._fetchone(
-            """
+            f"""
             SELECT COUNT(*) AS total,
                    COALESCE(SUM(amount_cents), 0) AS amount
             FROM orders
-            WHERE status = 'paid' AND product_key = 'balance_topup'
-            """
+            WHERE status = 'paid' AND product_key = 'balance_topup'{user_filter}{paid_filter}
+            """,
+            paid_params,
         )
         return {
             "paid_orders": int(row["paid_orders"]) if row else 0,
@@ -1825,58 +2015,95 @@ class Database:
             "topup_cents": int(topups["amount"]) if topups else 0,
         }
 
-    async def paid_orders_by_product(self, limit: int = 10) -> list[aiosqlite.Row]:
+    async def paid_orders_by_product(
+        self,
+        limit: int = 10,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> list[aiosqlite.Row]:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND paid_at >= ?" if since else ""
+        params = user_params + ((since,) if since else ()) + (limit,)
         return await self._fetchall(
-            """
+            f"""
             SELECT product_key,
                    COUNT(*) AS orders,
                    COALESCE(SUM(quantity), 0) AS units
             FROM orders
-            WHERE status = 'paid' AND order_type = 'product'
+            WHERE status = 'paid' AND order_type = 'product'{user_filter}{date_filter}
             GROUP BY product_key
             ORDER BY units DESC, orders DESC
             LIMIT ?
             """,
-            (limit,),
+            params,
         )
 
-    async def manual_payment_stats(self) -> dict[str, int]:
+    async def manual_payment_stats(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> dict[str, int]:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND created_at >= ?" if since else ""
+        params = user_params + ((since,) if since else ())
         rows = await self._fetchall(
-            "SELECT status, COUNT(*) AS total FROM manual_payments GROUP BY status"
+            f"SELECT status, COUNT(*) AS total FROM manual_payments WHERE 1 = 1{user_filter}{date_filter} GROUP BY status",
+            params,
         )
         return {str(row["status"]): int(row["total"]) for row in rows}
 
-    async def count_users_since(self, since: str) -> int:
-        row = await self._fetchone(
-            "SELECT COUNT(*) AS total FROM users WHERE created_at >= ?",
-            (since,),
-        )
-        return int(row["total"]) if row is not None else 0
+    async def count_users_since(
+        self,
+        since: str,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> int:
+        return await self.count_users(since, excluded_user_ids)
 
-    async def users_by_language(self) -> dict[str, int]:
+    async def users_by_language(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> dict[str, int]:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND created_at >= ?" if since else ""
+        params = user_params + ((since,) if since else ())
         rows = await self._fetchall(
-            """
+            f"""
             SELECT COALESCE(language, '—') AS language, COUNT(*) AS total
             FROM users
+            WHERE 1 = 1{user_filter}{date_filter}
             GROUP BY COALESCE(language, '—')
             ORDER BY total DESC
-            """
+            """,
+            params,
         )
         return {str(row["language"]): int(row["total"]) for row in rows}
 
-    async def waitlist_counts(self) -> dict[str, int]:
+    async def waitlist_counts(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> dict[str, int]:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        date_filter = " AND created_at >= ?" if since else ""
+        params = user_params + ((since,) if since else ())
         rows = await self._fetchall(
-            """
+            f"""
             SELECT product_key, COUNT(*) AS total
             FROM waitlist
-            WHERE status = 'active'
+            WHERE status = 'active'{user_filter}{date_filter}
             GROUP BY product_key
-            """
+            """,
+            params,
         )
         return {str(row["product_key"]): int(row["total"]) for row in rows}
 
-    async def balance_total_cents(self) -> int:
-        row = await self._fetchone("SELECT COALESCE(SUM(balance_cents), 0) AS total FROM users")
+    async def balance_total_cents(self, excluded_user_ids: tuple[int, ...] = ()) -> int:
+        user_filter, user_params = self._user_exclusion("user_id", excluded_user_ids)
+        row = await self._fetchone(
+            f"SELECT COALESCE(SUM(balance_cents), 0) AS total FROM users WHERE 1 = 1{user_filter}",
+            user_params,
+        )
         return int(row["total"]) if row is not None else 0
 
     # ------------------------------------------------------------------
@@ -1974,17 +2201,52 @@ class Database:
             "earned_cents": int(earned["total"]) if earned else 0,
         }
 
-    async def referral_totals(self) -> dict[str, int]:
+    async def referral_totals(
+        self,
+        since: str | None = None,
+        excluded_user_ids: tuple[int, ...] = (),
+    ) -> dict[str, int]:
+        ids = tuple(dict.fromkeys(int(user_id) for user_id in excluded_user_ids))
+        payout_conditions: list[str] = []
+        payout_params: tuple[Any, ...] = ()
+        invited_conditions: list[str] = ["referrer_id IS NOT NULL"]
+        invited_params: tuple[Any, ...] = ()
+        if ids:
+            placeholders = ", ".join("?" for _ in ids)
+            payout_conditions.extend(
+                [
+                    f"referrer_id NOT IN ({placeholders})",
+                    f"buyer_id NOT IN ({placeholders})",
+                ]
+            )
+            payout_params += ids + ids
+            invited_conditions.extend(
+                [
+                    f"user_id NOT IN ({placeholders})",
+                    f"referrer_id NOT IN ({placeholders})",
+                ]
+            )
+            invited_params += ids + ids
+        if since:
+            payout_conditions.append("created_at >= ?")
+            payout_params += (since,)
+            invited_conditions.append("created_at >= ?")
+            invited_params += (since,)
+        payout_where = "WHERE " + " AND ".join(payout_conditions) if payout_conditions else ""
+        invited_where = "WHERE " + " AND ".join(invited_conditions)
         row = await self._fetchone(
-            """
+            f"""
             SELECT COUNT(*) AS payouts,
                    COALESCE(SUM(amount_cents), 0) AS total,
                    COUNT(DISTINCT referrer_id) AS earners
             FROM referral_payouts
-            """
+            {payout_where}
+            """,
+            payout_params,
         )
         invited = await self._fetchone(
-            "SELECT COUNT(*) AS total FROM users WHERE referrer_id IS NOT NULL"
+            f"SELECT COUNT(*) AS total FROM users {invited_where}",
+            invited_params,
         )
         return {
             "payouts": int(row["payouts"]) if row else 0,

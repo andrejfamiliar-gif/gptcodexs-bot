@@ -92,6 +92,7 @@ _UI: dict[str, dict[str, str]] = {
     },
     "stock": {"ru": "Наличие", "en": "Stock", "zh": "库存", "vi": "Tồn kho", "hi": "स्टॉक"},
     "price": {"ru": "Цена", "en": "Price", "zh": "价格", "vi": "Giá", "hi": "कीमत"},
+    "description": {"ru": "Описание", "en": "Description", "zh": "描述", "vi": "Mô tả", "hi": "विवरण"},
     "buy_one": {"ru": "🛒 Купить 1", "en": "🛒 Buy 1", "zh": "🛒 购买 1 个", "vi": "🛒 Mua 1", "hi": "🛒 1 खरीदें"},
     "buy_many": {
         "ru": "📦 Купить несколько",
@@ -313,11 +314,11 @@ _UI: dict[str, dict[str, str]] = {
         "hi": "⚙️ सेटिंग्स",
     },
     "label_invited": {
-        "ru": "Приглашено",
-        "en": "Invited",
-        "zh": "已邀请",
-        "vi": "Đã mời",
-        "hi": "आमंत्रित",
+        "ru": "Ваши рефералы",
+        "en": "Your referrals",
+        "zh": "你的邀请人数",
+        "vi": "Số người được giới thiệu",
+        "hi": "आपके रेफ़रल",
     },
     "label_referral_earned": {
         "ru": "Заработано с рефералов",
@@ -471,31 +472,61 @@ def categories_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 async def queue_keyboard_v2(language: str) -> InlineKeyboardMarkup:
-    """Show every product that can be reserved, including virtual stock.
+    """Mirror the product categories in the queue, using blue buttons only."""
+    grouped = _products_by_category()
+    buttons = [
+        InlineKeyboardButton(
+            text=f"{_category_title(category)} ({len(products)})",
+            callback_data=f"shop:queue_cat:{category}",
+            style=ButtonStyle.PRIMARY,
+        )
+        for category, products in sorted(
+            grouped.items(), key=lambda item: _category_title(item[0]).lower()
+        )
+    ]
+    rows = [buttons[index : index + 2] for index in range(0, len(buttons), 2)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=ui(language, "back"),
+                callback_data="shop:home",
+                style=ButtonStyle.PRIMARY,
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-    The quantity/payment callbacks are kept compatible with the existing
-    queue flow in ``bot.py``; only the product picker is part of the inline v2
-    storefront so newly-created admin products appear here too.
-    """
-    rt = legacy.get_runtime()
-    stock = await rt.db.available_stock()
+
+def queue_category_keyboard(language: str, category: str) -> InlineKeyboardMarkup:
+    grouped = _products_by_category()
     rows: list[list[InlineKeyboardButton]] = []
-    for key, product in rt.settings.products.items():
-        count = int(stock.get(key, 0))
+    for key, product in grouped.get(category, []):
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=f"{'🟢' if count > 0 else '🔴'} "
-                    f"{legacy.product_label(product, language)} · "
-                    f"{legacy.product_price_button(rt.settings, product, language)}",
+                    text=(
+                        f"{legacy.product_label(product, language)} · "
+                        f"{legacy.product_price_button(legacy.get_runtime().settings, product, language)}"
+                    ),
                     callback_data=f"shop:queue_product:{key}",
-                    style=ButtonStyle.SUCCESS if count > 0 else ButtonStyle.DANGER,
+                    style=ButtonStyle.PRIMARY,
                 )
             ]
         )
     rows.extend(
         [
-            [InlineKeyboardButton(text=ui(language, "back"), callback_data="shop:home")],
+            [
+                InlineKeyboardButton(
+                    text=ui(language, "back"),
+                    callback_data="shop:queue",
+                    style=ButtonStyle.PRIMARY,
+                ),
+                InlineKeyboardButton(
+                    text=ui(language, "home"),
+                    callback_data="shop:home",
+                    style=ButtonStyle.PRIMARY,
+                ),
+            ]
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -793,6 +824,9 @@ async def render_product(callback: CallbackQuery, language: str, product_key: st
         f"💵 {ui(language, 'price')}: <b>{price}</b>\n"
         f"📦 {ui(language, 'stock')}: <b>{stock}</b>"
     )
+    description = str(product.description or "").strip()
+    if description:
+        text += f"\n\n📝 {ui(language, 'description')}:\n{html.escape(description)}"
     if stock <= 0:
         text += f"\n\n{ui(language, 'out_of_stock')}"
     await edit_or_send(callback, text, product_keyboard(language, product_key, stock))
@@ -1135,6 +1169,25 @@ async def queue_product_callback_v2(callback: CallbackQuery) -> None:
         f"{legacy.t(language, 'queue_choose_quantity')}\n\n"
         f"📦 <b>{html.escape(legacy.product_label(product, language))}</b>",
         legacy.queue_quantity_keyboard(language, product_key),
+    )
+
+
+@router.callback_query(F.data.startswith("shop:queue_cat:"))
+async def queue_category_callback_v2(callback: CallbackQuery) -> None:
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    category = (callback.data or "").split(":", maxsplit=2)[2]
+    grouped = _products_by_category()
+    if category not in grouped:
+        await callback.answer(ui(language, "category_empty"), show_alert=True)
+        return
+    await callback.answer()
+    await edit_or_send(
+        callback,
+        f"{_category_title(category)}\n\n{legacy.t(language, 'queue_choose_quantity')}",
+        queue_category_keyboard(language, category),
     )
 
 
@@ -1489,10 +1542,9 @@ async def support_callback(callback: CallbackQuery) -> None:
     await callback.answer()
     await edit_or_send(
         callback,
-        legacy.t(language, "help", support=legacy.support_contact(rt.settings)),
+        legacy.t(language, "help", support=legacy.support_contact(rt.settings, language)),
         InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text=rt.settings.support_label, url=rt.settings.support_link)],
                 [InlineKeyboardButton(text=ui(language, "support_ticket"), callback_data="shop:ticket:new")],
                 [InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")],
             ]
@@ -1635,7 +1687,10 @@ async def pay_cpay_callback(callback: CallbackQuery) -> None:
         )
     except Exception:
         logger.exception("Could not create Crypto Bot invoice")
-        await callback.answer(legacy.t(language, "payment_error", support=legacy.support_contact(rt.settings)), show_alert=True)
+        await callback.answer(
+            legacy.t(language, "payment_error", support=legacy.support_contact(rt.settings, language)),
+            show_alert=True,
+        )
         return
     await callback.answer()
     await edit_or_send(
@@ -1894,7 +1949,11 @@ async def create_direct_crypto_payment(
     if existing is not None:
         if str(existing["status"]) == "pending":
             await callback.answer(
-                legacy.t(language, "mpay_open_exists", payment_id=int(existing["id"])),
+                legacy.t(
+                    language,
+                    "mpay_open_exists",
+                    payment_id=int(existing["public_number"] or existing["id"]),
+                ),
                 show_alert=True,
             )
             return
@@ -1979,7 +2038,11 @@ async def linked_manual_cancel_callback(callback: CallbackQuery, state: FSMConte
         # A hash was already submitted; the transfer may be on-chain, so do not
         # let the buyer discard the verification request.
         await callback.answer(
-            legacy.t(language, "mpay_open_exists", payment_id=payment_id),
+            legacy.t(
+                language,
+                "mpay_open_exists",
+                payment_id=int(payment["public_number"] or payment_id),
+            ),
             show_alert=True,
         )
         return
@@ -1997,8 +2060,8 @@ async def linked_manual_cancel_callback(callback: CallbackQuery, state: FSMConte
             legacy.t(
                 language,
                 "mpay_cancelled",
-                payment_id=payment_id,
-                support=legacy.support_contact(legacy.get_runtime().settings),
+                payment_id=int(payment["public_number"] or payment_id),
+                support=legacy.support_contact(legacy.get_runtime().settings, language),
             )
         )
 
@@ -2029,11 +2092,21 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
         await callback.answer("Некорректный запрос", show_alert=True)
         return
     rt = legacy.get_runtime()
+    payment_before_decision = await rt.db.get_manual_payment(payment_id)
+    payment_number = (
+        int(payment_before_decision["public_number"] or payment_id)
+        if payment_before_decision is not None
+        else payment_id
+    )
     order_id = await linked_order_id(payment_id)
     payment = await rt.db.decide_manual_payment(payment_id, callback.from_user.id, approve)
     if payment is None:
-        await callback.answer(legacy.t("ru", "mpay_admin_already", payment_id=payment_id), show_alert=True)
+        await callback.answer(
+            legacy.t("ru", "mpay_admin_already", payment_id=payment_number),
+            show_alert=True,
+        )
         return
+    payment_number = int(payment["public_number"] or payment_number)
 
     user_id = int(payment["user_id"])
     language = await rt.db.get_language(user_id) or "en"
@@ -2062,7 +2135,7 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
         except TelegramBadRequest:
             pass
         await callback.message.answer(
-            f"{'✅' if approve else '❌'} Manual payment #{payment_id} "
+            f"{'✅' if approve else '❌'} Manual payment #{payment_number} "
             f"{'confirmed' if approve else 'rejected'}"
         )
 
@@ -2079,7 +2152,7 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
                     legacy.t(
                         language,
                         "mpay_confirmed",
-                        payment_id=payment_id,
+                        payment_id=payment_number,
                         amount=legacy.localized_price(rt.settings, language, int(payment["amount_cents"])),
                         balance=legacy.localized_price(rt.settings, language, balance),
                     ),
@@ -2093,7 +2166,7 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
                 legacy.t(
                     language,
                     "mpay_confirmed",
-                    payment_id=payment_id,
+                    payment_id=payment_number,
                     amount=legacy.localized_price(rt.settings, language, int(payment["amount_cents"])),
                     balance=legacy.localized_price(rt.settings, language, balance),
                 ),
@@ -2104,8 +2177,8 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
                 legacy.t(
                     language,
                     "mpay_rejected",
-                    payment_id=payment_id,
-                    support=legacy.support_contact(rt.settings),
+                    payment_id=payment_number,
+                    support=legacy.support_contact(rt.settings, language),
                 ),
             )
     except Exception:

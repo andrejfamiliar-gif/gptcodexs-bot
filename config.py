@@ -50,6 +50,7 @@ class Product:
     price_cents: int
     category: str = "catalog"
     discount_percent: int = 0
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -203,10 +204,12 @@ def load_settings() -> Settings:
         bot_token=bot_token,
         crypto_pay_token=crypto_pay_token,
         db_path=db_path,
-        support_username=getenv("SUPPORT_USERNAME", "@codexrepIybot").strip() or "@codexrepIybot",
-        support_label=getenv("SUPPORT_LABEL", "@admingpt").strip() or "@admingpt",
-        support_link=getenv("SUPPORT_LINK", "https://t.me/codexrepIybot").strip()
-        or "https://t.me/codexrepIybot",
+        # Kept as optional compatibility fields for older .env files. Customer
+        # support is handled only through in-bot tickets; these values are no
+        # longer rendered or used as outbound support links.
+        support_username=getenv("SUPPORT_USERNAME", "").strip(),
+        support_label=getenv("SUPPORT_LABEL", "").strip(),
+        support_link=getenv("SUPPORT_LINK", "").strip(),
         offer_link=getenv(
             "OFFER_LINK",
             "https://telegra.ph/GPT-Codex-Shop-Terms-of-Sale-and-Public-Offer-08-05",

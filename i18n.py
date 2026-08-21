@@ -68,9 +68,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Выберите тип аккаунта Plus:",
     },
     "balance": {
-        "zh": "💰 余额：{balance}\n\n你可以通过 Crypto Pay 充值。",
-        "en": "💰 Balance: {balance}\n\nYou can top up using Crypto Pay.",
-        "ru": "💰 Баланс: {balance}\n\nПополнить баланс можно через Crypto Pay.",
+        "zh": "💰 余额：{balance}\n\n你可以通过 Crypto Bot 充值。",
+        "en": "💰 Balance: {balance}\n\nYou can top up using Crypto Bot.",
+        "ru": "💰 Баланс: {balance}\n\nПополнить баланс можно через Crypto Bot.",
     },
     "top_up": {
         "zh": "💳 选择充值金额：",
@@ -92,9 +92,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Введите корректную сумму, например {example}.",
     },
     "top_up_invoice": {
-        "zh": "充值账单已创建：{amount}\nCrypto Pay 账单：{usd_amount}\n点击下方按钮完成支付。\n支付成功后余额会自动更新。",
-        "en": "Top-up invoice created: {amount}\nCrypto Pay invoice: {usd_amount}\nTap the button below to pay.\nYour balance will update automatically after payment.",
-        "ru": "Счёт на пополнение создан: {amount}\nСчёт Crypto Pay: {usd_amount}\nНажмите кнопку ниже для оплаты.\nПосле оплаты баланс обновится автоматически.",
+        "zh": "充值账单已创建：{amount}\nCrypto Bot 账单：{usd_amount}\n点击下方按钮完成支付。\n支付成功后余额会自动更新。",
+        "en": "Top-up invoice created: {amount}\nCrypto Bot invoice: {usd_amount}\nTap the button below to pay.\nYour balance will update automatically after payment.",
+        "ru": "Счёт на пополнение создан: {amount}\nСчёт Crypto Bot: {usd_amount}\nНажмите кнопку ниже для оплаты。\nПосле оплаты баланс обновится автоматически.",
     },
     # Just the question. The two buttons below it are named plainly enough that
     # spelling out what each one does only adds a wall of text over the choice.
@@ -235,14 +235,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Ввод хеша отменён. Заявка на оплату всё ещё активна — если перевод уже сделан, вернитесь к сообщению с оплатой и снова нажмите «Я отправил».",
     },
     "mpay_hash_duplicate": {
-        "zh": "该交易哈希已被提交过。如果您确认这是新的转账，请联系 {support}。",
-        "en": "That transaction hash has already been submitted. If this really is a new transfer, contact {support}.",
-        "ru": "Этот хеш уже отправляли. Если это действительно новый перевод, напишите {support}.",
+        "zh": "该交易哈希已被提交过。如果您确认这是新的转账，请通过机器人内的支持工单联系我们。",
+        "en": "That transaction hash has already been submitted. If this really is a new transfer, use the in-bot support ticket.",
+        "ru": "Этот хеш уже отправляли. Если это действительно новый перевод, создайте тикет в боте.",
     },
     "mpay_submitted": {
-        "zh": "✅ 已收到申请 #{payment_id}。\n管理员会在区块浏览器上核对该交易，确认后余额将自动更新。\n如长时间未处理，请联系 {support}。",
-        "en": "✅ Request #{payment_id} received.\nAn admin will verify the transaction on a block explorer; your balance updates once it is confirmed.\nIf it takes too long, contact {support}.",
-        "ru": "✅ Заявка #{payment_id} принята.\nАдмин сверит транзакцию в блокчейн-обозревателе, после подтверждения баланс обновится.\nЕсли долго нет ответа — напишите {support}.",
+        "zh": "✅ 已收到申请 #{payment_id}。\n管理员会在区块浏览器上核对该交易，确认后余额将自动更新。\n如长时间未处理，请通过机器人内的支持工单联系我们。",
+        "en": "✅ Request #{payment_id} received.\nAn admin will verify the transaction on a block explorer; your balance updates once it is confirmed.\nIf it takes too long, use the in-bot support ticket.",
+        "ru": "✅ Заявка #{payment_id} принята.\nАдмин сверит транзакцию в блокчейн-обозревателе, после подтверждения баланс обновится.\nЕсли долго нет ответа — создайте тикет в боте.",
     },
     "mpay_confirmed": {
         "zh": "✅ 转账 #{payment_id} 已确认。\n已入账：{amount}\n当前余额：{balance}",
@@ -250,19 +250,19 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "✅ Перевод #{payment_id} подтверждён.\nЗачислено: {amount}\nБаланс: {balance}",
     },
     "mpay_rejected": {
-        "zh": "❌ 转账 #{payment_id} 未获确认。\n管理员在链上未找到这笔转账，或金额与申请不符。请联系 {support}。",
-        "en": "❌ Transfer #{payment_id} was not confirmed.\nThe admin could not find it on-chain, or the amount did not match the request. Contact {support}.",
-        "ru": "❌ Перевод #{payment_id} не подтверждён.\nАдмин не нашёл его в блокчейне либо сумма не совпала с заявкой. Напишите {support}.",
+        "zh": "❌ 转账 #{payment_id} 未获确认。\n管理员在链上未找到这笔转账，或金额与申请不符。请通过机器人内的支持工单联系我们。",
+        "en": "❌ Transfer #{payment_id} was not confirmed.\nThe admin could not find it on-chain, or the amount did not match the request. Use the in-bot support ticket if needed.",
+        "ru": "❌ Перевод #{payment_id} не подтверждён.\nАдмин не нашёл его в блокчейне либо сумма не совпала с заявкой. Если это ошибка, создайте тикет в боте.",
     },
     "mpay_cancelled": {
-        "zh": "申请 #{payment_id} 已取消。如果您已经转账，请联系 {support}。",
-        "en": "Request #{payment_id} cancelled. If you already sent the transfer, contact {support}.",
-        "ru": "Заявка #{payment_id} отменена. Если перевод вы всё-таки сделали — напишите {support}.",
+        "zh": "申请 #{payment_id} 已取消。如果您已经转账，请通过机器人内的支持工单联系我们。",
+        "en": "Request #{payment_id} cancelled. If you already sent the transfer, use the in-bot support ticket.",
+        "ru": "Заявка #{payment_id} отменена. Если перевод вы всё-таки сделали — создайте тикет в боте.",
     },
     "mpay_unavailable": {
-        "zh": "目前无法使用加密货币转账。请使用 Crypto Pay，或联系 {support}。",
-        "en": "Crypto transfer is unavailable right now. Use Crypto Pay or contact {support}.",
-        "ru": "Перевод криптовалютой сейчас недоступен. Используйте Crypto Pay или напишите {support}.",
+        "zh": "目前无法使用加密货币转账。请使用 Crypto Bot，或通过机器人内的支持工单联系我们。",
+        "en": "Crypto transfer is unavailable right now. Use Crypto Bot or the in-bot support ticket.",
+        "ru": "Перевод криптовалютой сейчас недоступен. Используйте Crypto Bot или создайте тикет в боте.",
     },
     "mpay_stale": {
         "zh": "该按钮已失效，请重新开始充值。",
@@ -327,9 +327,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Нет переводов криптой на подтверждение.",
     },
     "product_invoice": {
-        "zh": "商品：{product}\n显示价格：{amount}\nCrypto Pay 账单：{usd_amount}\n\n点击下方按钮用加密货币支付。",
-        "en": "Product: {product}\nDisplayed price: {amount}\nCrypto Pay invoice: {usd_amount}\n\nTap the button below to pay with crypto.",
-        "ru": "Товар: {product}\nЦена: {amount}\nСчёт Crypto Pay: {usd_amount}\n\nНажмите кнопку ниже для оплаты криптовалютой.",
+        "zh": "商品：{product}\n显示价格：{amount}\nCrypto Bot 账单：{usd_amount}\n\n点击下方按钮用加密货币支付。",
+        "en": "Product: {product}\nDisplayed price: {amount}\nCrypto Bot invoice: {usd_amount}\n\nTap the button below to pay with crypto.",
+        "ru": "Товар: {product}\nЦена: {amount}\nСчёт Crypto Bot: {usd_amount}\n\nНажмите кнопку ниже для оплаты криптовалютой.",
     },
     "pay": {
         "zh": "💳 支付",
@@ -397,9 +397,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Выберите количество:",
     },
     "queue_invoice": {
-        "zh": "🕒 排队订单\n商品：{product}\n数量：{quantity}\n价格：{amount}\nCrypto Pay 账单：{usd_amount}\n\n点击下方按钮完成付款。账号重新到货后，系统将自动为您发放。",
-        "en": "🕒 Queue order\nProduct: {product}\nQuantity: {quantity}\nPrice: {amount}\nCrypto Pay invoice: {usd_amount}\n\nTap the button below to pay. Once the account is back in stock, the system will automatically deliver it to you.",
-        "ru": "🕒 Заказ в очереди\nТовар: {product}\nКоличество: {quantity}\nЦена: {amount}\nСчёт Crypto Pay: {usd_amount}\n\nНажмите кнопку ниже для оплаты. Когда аккаунт снова появится в наличии, система автоматически выдаст его вам.",
+        "zh": "🕒 排队订单\n商品：{product}\n数量：{quantity}\n价格：{amount}\nCrypto Bot 账单：{usd_amount}\n\n点击下方按钮完成付款。账号重新到货后，系统将自动为您发放。",
+        "en": "🕒 Queue order\nProduct: {product}\nQuantity: {quantity}\nPrice: {amount}\nCrypto Bot invoice: {usd_amount}\n\nTap the button below to pay. Once the account is back in stock, the system will automatically deliver it to you.",
+        "ru": "🕒 Заказ в очереди\nТовар: {product}\nКоличество: {quantity}\nЦена: {amount}\nСчёт Crypto Bot: {usd_amount}\n\nНажмите кнопку ниже для оплаты. Когда аккаунт снова появится в наличии, система автоматически выдаст его вам.",
     },
     "queue_added": {
         "zh": "✅ 已加入等待名单：{product}\n商品到货后我们会自动通知你。",
@@ -421,19 +421,19 @@ TEXTS: dict[str, dict[str, str]] = {
             "✅ 付款已收到。\n\n"
             "该商品目前为预订状态，将在 {hours} 小时内自动发货。\n"
             "账号准备好后机器人会立即发送给你，无需再次操作。\n"
-            "如有疑问请联系 {support}。"
+            "如有疑问，请通过机器人内的支持工单联系我们。"
         ),
         "en": (
             "✅ Payment received.\n\n"
             "This item is on pre-order and will be delivered automatically within {hours} h.\n"
             "The bot sends the account as soon as it is ready — you do not need to do anything.\n"
-            "Questions: {support}."
+            "If you have questions, use the in-bot support ticket."
         ),
         "ru": (
             "✅ Оплата принята.\n\n"
             "Товар оформлен как предзаказ, выдача в течение {hours} ч.\n"
             "Бот отправит аккаунт автоматически, как только он будет готов — ничего делать не нужно.\n"
-            "Вопросы: {support}."
+            "Если появятся вопросы, создайте тикет в боте."
         ),
     },
     "delivery_account": {
@@ -452,9 +452,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "账号GPT Plus/Pro顶级品质\n\n🔗 Приглашайте друзей в бота:\n{link}",
     },
     "help": {
-        "zh": "📖 帮助\n\n客服：{support}\n请使用下方按钮查看销售条款和隐私政策。",
-        "en": "📖 Help\n\nSupport: {support}\nUse the buttons below to view the Terms of Sale and Privacy Policy.",
-        "ru": "📖 Помощь\n\nПоддержка: {support}\nИспользуйте кнопки ниже, чтобы открыть оферту и политику конфиденциальности.",
+        "zh": "📖 帮助\n\n客服：{support}\n请通过机器人内的工单获得帮助，并使用下方按钮查看销售条款和隐私政策。",
+        "en": "📖 Help\n\nSupport: {support}\nUse the in-bot ticket for help and the buttons below to view the Terms of Sale and Privacy Policy.",
+        "ru": "📖 Помощь\n\nПоддержка: {support}\nДля связи используйте тикет в боте. Кнопки ниже открывают оферту и политику конфиденциальности.",
+    },
+    "support_ticket_reference": {
+        "zh": "机器人内的支持工单",
+        "en": "the in-bot support ticket",
+        "ru": "тикет поддержки в боте",
     },
     "support_ticket_button": {
         "zh": "✉️ 联系客服",
@@ -576,7 +581,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "📦 <b>新货到店</b>\n"
             "╰───────────────╯\n"
             "✨ 刚刚补充了一批新账号。\n"
-            "🟢 库存已更新，先到先得。\n\n"
+            "🟢 库存已更新。\n\n"
             "打开「商品」看看现在有什么。"
         ),
         "en": (
@@ -584,7 +589,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "📦 <b>Restocked</b>\n"
             "╰───────────────╯\n"
             "✨ A fresh batch of accounts is in.\n"
-            "🟢 Stock is updated — first come, first served.\n\n"
+            "🟢 Stock is updated.\n\n"
             "Open «Products» to see what is available."
         ),
         "ru": (
@@ -592,7 +597,7 @@ TEXTS: dict[str, dict[str, str]] = {
             "📦 <b>Новое поступление</b>\n"
             "╰───────────────╯\n"
             "✨ Загрузили свежую партию аккаунтов.\n"
-            "🟢 Наличие обновлено — кто успел, тот забрал.\n\n"
+            "🟢 Наличие обновлено.\n\n"
             "Откройте «Товары», чтобы посмотреть."
         ),
     },
@@ -612,9 +617,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "🛍 Выберите товар:",
     },
     "payment_error": {
-        "zh": "无法创建账单。请稍后再试或联系 {support}。",
-        "en": "Could not create the invoice. Try again later or contact {support}.",
-        "ru": "Не удалось создать счёт. Попробуйте позже или напишите {support}.",
+        "zh": "无法创建账单。请稍后再试，并通过机器人内的支持工单联系我们。",
+        "en": "Could not create the invoice. Try again later and use the in-bot support ticket if needed.",
+        "ru": "Не удалось создать счёт. Попробуйте позже. Если проблема останется, создайте тикет в боте.",
     },
     "generic_error": {
         "zh": "发生错误，请稍后再试。",
@@ -879,13 +884,13 @@ _VI: dict[str, str] = {
     "unknown_command": "Vui lòng dùng một trong các nút menu.",
     "choose_pro_plan": "Chọn gói Pro:",
     "choose_plus_plan": "Chọn loại tài khoản Plus:",
-    "balance": "💰 Số dư: {balance}\n\nBạn có thể nạp tiền qua Crypto Pay.",
+    "balance": "💰 Số dư: {balance}\n\nBạn có thể nạp tiền qua Crypto Bot.",
     "top_up": "💳 Chọn số tiền nạp:",
     "top_up_other": "Nhập số tiền nạp bằng {currency}:",
     "top_up_invalid": "Hãy nhập số tiền hợp lệ, ví dụ {example}.",
     "top_up_invoice": (
         "Đã tạo hoá đơn nạp tiền: {amount}\n"
-        "Hoá đơn Crypto Pay: {usd_amount}\n"
+        "Hoá đơn Crypto Bot: {usd_amount}\n"
         "Nhấn nút bên dưới để thanh toán.\n"
         "Số dư sẽ được cập nhật tự động sau khi thanh toán."
     ),
@@ -909,13 +914,13 @@ _VI: dict[str, str] = {
     ),
     "mpay_hash_duplicate": (
         "Mã giao dịch này đã được gửi trước đó. Nếu đây thực sự là một lần chuyển mới, "
-        "hãy liên hệ {support}."
+        "hãy tạo phiếu hỗ trợ trong bot."
     ),
     "mpay_submitted": (
         "✅ Đã nhận yêu cầu #{payment_id}.\n"
         "Quản trị viên sẽ kiểm tra giao dịch trên blockchain; số dư của bạn sẽ được cập nhật "
         "sau khi xác nhận.\n"
-        "Nếu quá lâu, hãy liên hệ {support}."
+        "Nếu quá lâu, hãy tạo phiếu hỗ trợ trong bot."
     ),
     "mpay_confirmed": (
         "✅ Đã xác nhận chuyển khoản #{payment_id}.\n"
@@ -925,13 +930,13 @@ _VI: dict[str, str] = {
     "mpay_rejected": (
         "❌ Chuyển khoản #{payment_id} không được xác nhận.\n"
         "Quản trị viên không tìm thấy nó trên blockchain, hoặc số tiền không khớp với yêu cầu. "
-        "Hãy liên hệ {support}."
+        "Hãy tạo phiếu hỗ trợ trong bot nếu cần."
     ),
     "mpay_cancelled": (
-        "Đã huỷ yêu cầu #{payment_id}. Nếu bạn đã chuyển tiền, hãy liên hệ {support}."
+        "Đã huỷ yêu cầu #{payment_id}. Nếu bạn đã chuyển tiền, hãy tạo phiếu hỗ trợ trong bot."
     ),
     "mpay_unavailable": (
-        "Hiện không thể thanh toán bằng cryptocurrency. Hãy dùng Crypto Pay hoặc liên hệ {support}."
+        "Hiện không thể thanh toán bằng cryptocurrency. Hãy dùng Crypto Bot hoặc tạo phiếu hỗ trợ trong bot."
     ),
     "mpay_stale": "Nút này không còn hiệu lực. Hãy bắt đầu nạp tiền lại.",
     "mpay_open_exists": (
@@ -954,7 +959,7 @@ _VI: dict[str, str] = {
     "product_invoice": (
         "Sản phẩm: {product}\n"
         "Giá niêm yết: {amount}\n"
-        "Hoá đơn Crypto Pay: {usd_amount}\n\n"
+        "Hoá đơn Crypto Bot: {usd_amount}\n\n"
         "Nhấn nút bên dưới để thanh toán bằng crypto."
     ),
     "pay": "💳 Thanh toán",
@@ -984,7 +989,7 @@ _VI: dict[str, str] = {
         "Sản phẩm: {product}\n"
         "Số lượng: {quantity}\n"
         "Giá: {amount}\n"
-        "Hoá đơn Crypto Pay: {usd_amount}\n\n"
+        "Hoá đơn Crypto Bot: {usd_amount}\n\n"
         "Nhấn nút bên dưới để thanh toán. Khi có hàng trở lại, hệ thống sẽ tự động giao cho bạn."
     ),
     "queue_added": (
@@ -997,7 +1002,7 @@ _VI: dict[str, str] = {
         "✅ Đã nhận thanh toán.\n\n"
         "Sản phẩm này là đặt trước và sẽ được giao tự động trong {hours} giờ.\n"
         "Bot sẽ gửi tài khoản ngay khi sẵn sàng — bạn không cần làm gì thêm.\n"
-        "Thắc mắc: {support}."
+        "Nếu có thắc mắc, hãy tạo phiếu hỗ trợ trong bot."
     ),
     "delivery_account": (
         "✅ Đơn hàng hoàn tất\n"
@@ -1009,9 +1014,10 @@ _VI: dict[str, str] = {
     "invite": "账号GPT Plus/Pro顶级品质\n\n🔗 Mời bạn bè vào bot:\n{link}",
     "help": (
         "📖 Trợ giúp\n\n"
-        "Hỗ trợ: {support}\n"
-        "Dùng các nút bên dưới để xem Điều khoản bán hàng và Chính sách bảo mật."
+        "Hỗ trợ: phiếu hỗ trợ trong bot\n"
+        "Dùng các nút bên dưới để mở phiếu hỗ trợ, Điều khoản bán hàng và Chính sách bảo mật."
     ),
+    "support_ticket_reference": "phiếu hỗ trợ trong bot",
     "support_ticket_button": "✉️ Liên hệ hỗ trợ",
     "support_ticket_prompt": "Mô tả vấn đề trong một tin nhắn. Gửi /cancel để huỷ.",
     "support_ticket_created": "✅ Đã tạo yêu cầu #{ticket_id}. Chúng tôi sẽ phản hồi sớm nhất có thể.",
@@ -1043,13 +1049,13 @@ _VI: dict[str, str] = {
         "📦 <b>Hàng mới về</b>\n"
         "╰───────────────╯\n"
         "✨ Vừa nhập một lô tài khoản mới.\n"
-        "🟢 Tồn kho đã cập nhật — ai nhanh người đó được.\n\n"
+        "🟢 Tồn kho đã cập nhật.\n\n"
         "Mở «Sản phẩm» để xem hàng còn."
     ),
     "catalog": "🛍 Sản phẩm",
     "catalog_empty": "Hiện chưa có sản phẩm nào.",
     "catalog_title": "🛍 Chọn một sản phẩm:",
-    "payment_error": "Không thể tạo hoá đơn. Hãy thử lại sau hoặc liên hệ {support}.",
+    "payment_error": "Không thể tạo hoá đơn. Hãy thử lại sau; nếu vẫn lỗi, hãy tạo phiếu hỗ trợ trong bot.",
     "generic_error": "Có lỗi xảy ra. Vui lòng thử lại sau.",
     "admin_only": "Lệnh này chỉ dành cho quản trị viên.",
     "admin_good_added": "Đã thêm sản phẩm vào kho: {product}, ID {good_id}.",
@@ -1067,13 +1073,13 @@ _HI: dict[str, str] = {
     "unknown_command": "कृपया मेन्यू के बटनों में से किसी एक का उपयोग करें।",
     "choose_pro_plan": "Pro प्लान चुनें:",
     "choose_plus_plan": "Plus खाते का प्रकार चुनें:",
-    "balance": "💰 शेष राशि: {balance}\n\nआप Crypto Pay से पैसे जोड़ सकते हैं।",
+    "balance": "💰 शेष राशि: {balance}\n\nआप Crypto Bot से पैसे जोड़ सकते हैं।",
     "top_up": "💳 जोड़ने के लिए राशि चुनें:",
     "top_up_other": "{currency} में जोड़ने के लिए राशि दर्ज करें:",
     "top_up_invalid": "मान्य राशि दर्ज करें, उदाहरण के लिए {example}।",
     "top_up_invoice": (
         "राशि जोड़ने का इनवॉइस बन गया: {amount}\n"
-        "Crypto Pay इनवॉइस: {usd_amount}\n"
+        "Crypto Bot इनवॉइस: {usd_amount}\n"
         "भुगतान के लिए नीचे का बटन दबाएँ।\n"
         "भुगतान के बाद आपकी शेष राशि अपने आप अपडेट हो जाएगी।"
     ),
@@ -1097,12 +1103,12 @@ _HI: dict[str, str] = {
     ),
     "mpay_hash_duplicate": (
         "यह ट्रांज़ैक्शन हैश पहले ही भेजा जा चुका है। अगर यह सचमुच नया ट्रांसफ़र है, तो "
-        "{support} से संपर्क करें।"
+        "बॉट में सहायता टिकट बनाएँ।"
     ),
     "mpay_submitted": (
         "✅ अनुरोध #{payment_id} मिल गया।\n"
         "एडमिन ब्लॉक एक्सप्लोरर पर ट्रांज़ैक्शन जाँचेगा; पुष्टि होने पर शेष राशि अपडेट हो जाएगी।\n"
-        "अगर बहुत देर लगे तो {support} से संपर्क करें।"
+        "अगर बहुत देर लगे तो बॉट में सहायता टिकट बनाएँ।"
     ),
     "mpay_confirmed": (
         "✅ ट्रांसफ़र #{payment_id} की पुष्टि हो गई।\n"
@@ -1112,14 +1118,14 @@ _HI: dict[str, str] = {
     "mpay_rejected": (
         "❌ ट्रांसफ़र #{payment_id} की पुष्टि नहीं हुई।\n"
         "एडमिन को यह ब्लॉकचेन पर नहीं मिला, या राशि अनुरोध से मेल नहीं खाई। "
-        "{support} से संपर्क करें।"
+        "ज़रूरत हो तो बॉट में सहायता टिकट बनाएँ।"
     ),
     "mpay_cancelled": (
-        "अनुरोध #{payment_id} रद्द कर दिया गया। अगर आपने पैसे भेज दिए हैं तो {support} से संपर्क करें।"
+        "अनुरोध #{payment_id} रद्द कर दिया गया। अगर आपने पैसे भेज दिए हैं तो बॉट में सहायता टिकट बनाएँ।"
     ),
     "mpay_unavailable": (
-        "अभी cryptocurrency से भुगतान उपलब्ध नहीं है। Crypto Pay का उपयोग करें या "
-        "{support} से संपर्क करें।"
+        "अभी cryptocurrency से भुगतान उपलब्ध नहीं है। Crypto Bot का उपयोग करें या "
+        "बॉट में सहायता टिकट बनाएँ।"
     ),
     "mpay_stale": "यह बटन अब मान्य नहीं है। राशि जोड़ना फिर से शुरू करें।",
     "mpay_open_exists": (
@@ -1142,7 +1148,7 @@ _HI: dict[str, str] = {
     "product_invoice": (
         "उत्पाद: {product}\n"
         "प्रदर्शित कीमत: {amount}\n"
-        "Crypto Pay इनवॉइस: {usd_amount}\n\n"
+        "Crypto Bot इनवॉइस: {usd_amount}\n\n"
         "crypto से भुगतान के लिए नीचे का बटन दबाएँ।"
     ),
     "pay": "💳 भुगतान करें",
@@ -1172,7 +1178,7 @@ _HI: dict[str, str] = {
         "उत्पाद: {product}\n"
         "मात्रा: {quantity}\n"
         "कीमत: {amount}\n"
-        "Crypto Pay इनवॉइस: {usd_amount}\n\n"
+        "Crypto Bot इनवॉइस: {usd_amount}\n\n"
         "भुगतान के लिए नीचे का बटन दबाएँ। स्टॉक आने पर सिस्टम अपने आप आपको दे देगा।"
     ),
     "queue_added": (
@@ -1185,7 +1191,7 @@ _HI: dict[str, str] = {
         "✅ भुगतान प्राप्त हो गया।\n\n"
         "यह उत्पाद प्री-ऑर्डर पर है और {hours} घंटे के भीतर स्वचालित रूप से डिलीवर होगा।\n"
         "खाता तैयार होते ही बॉट उसे भेज देगा — आपको कुछ नहीं करना है।\n"
-        "प्रश्न: {support}।"
+        "प्रश्न हों तो बॉट में सहायता टिकट बनाएँ।"
     ),
     "delivery_account": (
         "✅ ऑर्डर पूरा हुआ\n"
@@ -1197,9 +1203,10 @@ _HI: dict[str, str] = {
     "invite": "账号GPT Plus/Pro顶级品质\n\n🔗 दोस्तों को बॉट में बुलाएँ:\n{link}",
     "help": (
         "📖 सहायता\n\n"
-        "सहायता: {support}\n"
-        "बिक्री की शर्तें और गोपनीयता नीति देखने के लिए नीचे के बटनों का उपयोग करें।"
+        "सहायता: बॉट का सहायता टिकट\n"
+        "सहायता टिकट, बिक्री की शर्तें और गोपनीयता नीति खोलने के लिए नीचे के बटनों का उपयोग करें।"
     ),
+    "support_ticket_reference": "बॉट का सहायता टिकट",
     "support_ticket_button": "✉️ सहायता से संपर्क करें",
     "support_ticket_prompt": "अपनी समस्या एक संदेश में लिखें। रद्द करने के लिए /cancel भेजें।",
     "support_ticket_created": "✅ अनुरोध #{ticket_id} बना दिया गया है। हम जल्द से जल्द जवाब देंगे।",
@@ -1231,13 +1238,13 @@ _HI: dict[str, str] = {
         "📦 <b>नया स्टॉक आया</b>\n"
         "╰───────────────╯\n"
         "✨ खातों की नई खेप आ गई है।\n"
-        "🟢 स्टॉक अपडेट है — पहले आइए, पहले पाइए।\n\n"
+        "🟢 स्टॉक अपडेट है।\n\n"
         "उपलब्धता देखने के लिए «उत्पाद» खोलें।"
     ),
     "catalog": "🛍 उत्पाद",
     "catalog_empty": "अभी कोई उत्पाद उपलब्ध नहीं है।",
     "catalog_title": "🛍 कोई उत्पाद चुनें:",
-    "payment_error": "इनवॉइस नहीं बन सका। बाद में फिर कोशिश करें या {support} से संपर्क करें।",
+    "payment_error": "इनवॉइस नहीं बन सका। बाद में फिर कोशिश करें; समस्या रहे तो बॉट में सहायता टिकट बनाएँ।",
     "generic_error": "कुछ गड़बड़ हो गई। कृपया बाद में फिर कोशिश करें।",
     "admin_only": "यह कमांड केवल एडमिन के लिए है।",
     "admin_good_added": "स्टॉक में जोड़ा गया: {product}, ID {good_id}।",
@@ -1364,7 +1371,6 @@ def main_keyboard(language: str) -> ReplyKeyboardMarkup:
 
 def help_keyboard(
     language: str,
-    support_url: str,
     offer_url: str,
     privacy_url: str,
 ) -> InlineKeyboardMarkup:
@@ -1381,7 +1387,22 @@ def help_keyboard(
     )
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="@admingpt", url=support_url)],
+            [
+                InlineKeyboardButton(
+                    text=_pick(
+                        {
+                            "zh": "✉️ 联系客服",
+                            "en": "✉️ Contact support",
+                            "ru": "✉️ Написать в поддержку",
+                            "vi": "✉️ Liên hệ hỗ trợ",
+                            "hi": "✉️ सहायता से संपर्क करें",
+                        },
+                        language,
+                    ),
+                    callback_data="shop:ticket:new",
+                    style=ButtonStyle.PRIMARY,
+                )
+            ],
             [InlineKeyboardButton(text=labels["offer"], url=offer_url)],
             [InlineKeyboardButton(text=labels["privacy"], url=privacy_url)],
         ]
@@ -1841,7 +1862,7 @@ def payment_method_keyboard(language: str, amount_cents: int) -> InlineKeyboardM
     # Left untranslated on purpose: the owner wants the same wording in every
     # language, the way the coin tickers are the same everywhere. Neither label
     # explains itself here — the two names go out bare.
-    auto = "⚡ Crypto Pay"
+    auto = "⚡ Crypto Bot"
     manual = "🪙 Cryptocurrency"
     return InlineKeyboardMarkup(
         inline_keyboard=[

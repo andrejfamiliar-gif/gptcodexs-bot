@@ -72,7 +72,17 @@ async def test_catalog(db: Database) -> None:
     check("re-seed does not overwrite admin price", rows["plus_nw"]["price_usd_cents"] == 777,
           str(rows["plus_nw"]["price_usd_cents"]))
 
-    created = await db.create_product("promo_x", "catalog", "Промо", "Promo", "促销", 199, 18000, 1400)
+    created = await db.create_product(
+        "promo_x",
+        "catalog",
+        "Промо",
+        "Promo",
+        "促销",
+        199,
+        18000,
+        1400,
+        "Описание промо-товара",
+    )
     check("new product created", created is True)
     duplicate = await db.create_product("promo_x", "catalog", "Промо", "Promo", "促销", 199, 18000, 1400)
     check("duplicate key rejected", duplicate is False)
@@ -83,6 +93,10 @@ async def test_catalog(db: Database) -> None:
         check("zero price rejected", True)
     check("new product visible in catalog",
           "promo_x" in {r["product_key"] for r in await db.list_products()})
+    promo_row = next(row for row in await db.list_products() if row["product_key"] == "promo_x")
+    check("product description persists", promo_row["description"] == "Описание промо-товара")
+    check("product description updates",
+          await db.update_product_description("promo_x", "Новое описание") is True)
 
     check("price change applies", await db.update_product_prices("promo_x", 250, 22000, 1750) is True)
     check("price change on unknown key reports failure",
@@ -115,9 +129,26 @@ async def test_users(db: Database) -> None:
           1001 not in {int(r["user_id"]) for r in await db.list_purchase_notification_users()})
     await db.set_purchase_notifications(1001, True)
     check("notifications turn back on", await db.get_purchase_notifications(1001) is True)
+    check("global notifications default on", await db.get_purchase_notifications_global() is True)
+    await db.set_purchase_notifications_global(False)
+    check("global notifications exclude everyone", await db.list_purchase_notification_users() == [])
+    await db.set_purchase_notifications_global(True)
+
+    await db.ensure_user(9001, "smoke_admin")
+    await db.track_event(1001, "smoke_regular")
+    await db.track_event(9001, "smoke_admin")
+    event_counts = await db.event_counts(excluded_user_ids=(9001,))
+    check("admin excluded from event statistics", "smoke_admin" not in event_counts)
+    reset_at = await db.reset_statistics()
+    check("statistics reset timestamp saved", reset_at == await db.get_stats_reset_at())
 
     ticket_id = await db.create_support_ticket(1001, "Smoke support question")
     check("support ticket created", ticket_id > 0)
+    ticket = await db.get_support_ticket(ticket_id)
+    check(
+        "support ticket has five-digit public number",
+        ticket is not None and 10_000 <= int(ticket["public_number"]) <= 99_999,
+    )
     check("open support ticket counted", await db.count_support_tickets() == 1)
     check(
         "support ticket stores message",
@@ -156,6 +187,11 @@ async def test_paid_order_consumes_counter_and_referral_uses_usd(db: Database) -
         balance_amount_cents=500,
         order_token="smoke-settlement-order",
         invoice_id="smoke-settlement-invoice",
+    )
+    order = await db.get_order(order_id)
+    check(
+        "order has five-digit public number",
+        order is not None and 10_000 <= int(order["public_number"]) <= 99_999,
     )
     settled = await db.settle_paid_order(order_id, decrement_stock=True)
     check("paid order settles", settled is not None and settled["delivery_status"] == "pending")
@@ -203,6 +239,10 @@ async def test_manual_payments(db: Database) -> None:
     )
     row = await db.get_manual_payment(pid)
     check("created awaiting_hash", row is not None and row["status"] == "awaiting_hash")
+    check(
+        "manual payment has five-digit public number",
+        row is not None and 10_000 <= int(row["public_number"]) <= 99_999,
+    )
     check("open request found", (await db.open_manual_payment_for_user(2002))["id"] == pid)
 
     check("hash rejected for the wrong user",
