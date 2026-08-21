@@ -2,6 +2,19 @@ name: Telegram account shop bot
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "bot_v2.py"
+      - "bot.py"
+      - "database.py"
+      - "config.py"
+      - "i18n.py"
+      - "crypto_pay.py"
+      - "crypto_wallets.py"
+      - "requirements.txt"
+      - ".github/workflows/bot.yml"
   schedule:
     # Start a fresh polling process every five hours, before the six-hour cap.
     - cron: "0 */5 * * *"
@@ -52,7 +65,7 @@ jobs:
       DISPLAY_STOCK_GPT_PLUS_FW: "4"
       DISPLAY_STOCK_PRO_5X_NW: "6"
       DISPLAY_STOCK_PRO_20X_NW: "1"
-      DECREMENT_STOCK_ON_PAYMENT: "false"
+      DECREMENT_STOCK_ON_PAYMENT: "true"
       CNY_PER_USD: "7.20"
       RUB_PER_USD: "80.00"
 
@@ -83,7 +96,7 @@ jobs:
         # Stop before the next five-hour schedule so state can be saved cleanly.
         run: |
           set +e
-          timeout --signal=TERM --kill-after=30s 295m python bot.py
+          timeout --signal=TERM --kill-after=30s 295m python bot_v2.py
           status=$?
           # A planned window end is normal; other exit codes are real failures.
           if [ "$status" -eq 124 ] || [ "$status" -eq 143 ]; then
