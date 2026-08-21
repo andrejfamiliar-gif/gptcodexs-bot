@@ -49,6 +49,7 @@ class Product:
     title: dict[str, str]
     price_cents: int
     category: str = "catalog"
+    discount_percent: int = 0
 
 
 @dataclass(frozen=True)
@@ -122,7 +123,7 @@ def load_settings() -> Settings:
     ).strip()
     if not accepted_assets:
         raise RuntimeError("CRYPTO_ACCEPTED_ASSETS cannot be empty")
-    decrement_stock_on_payment = getenv("DECREMENT_STOCK_ON_PAYMENT", "false").strip().lower() in {
+    decrement_stock_on_payment = getenv("DECREMENT_STOCK_ON_PAYMENT", "true").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -161,28 +162,13 @@ def load_settings() -> Settings:
             category="pro",
         ),
     }
-    # Local prices: the owner's own round figure where one is pinned, otherwise
-    # the USD price at the configured exchange rate. Roubles keep the prices
-    # that were already live; the newer currencies simply track USD until the
-    # owner pins them with e.g. GPT_PLUS_NW_PRICE_VND.
-    rub_defaults = {
-        "gpt_plus_nw": "130",
-        "gpt_plus_fw": "300",
-        "pro_5x_nw": "1650",
-        "pro_20x_nw": "3350",
-    }
+    # Local prices are derived from the USD source price. The admin panel only
+    # asks for USD; using one conversion path prevents regional prices from
+    # drifting apart after an edit or a restart.
     regional_prices = {
         key: {
-            "en": product.price_cents,
-            "zh": _regional_price(f"{key.upper()}_PRICE_CNY", product.price_cents, currency_rates["zh"]),
-            "ru": _regional_price(
-                f"{key.upper()}_PRICE_RUB",
-                product.price_cents,
-                currency_rates["ru"],
-                rub_defaults[key],
-            ),
-            "vi": _regional_price(f"{key.upper()}_PRICE_VND", product.price_cents, currency_rates["vi"]),
-            "hi": _regional_price(f"{key.upper()}_PRICE_INR", product.price_cents, currency_rates["hi"]),
+            language: convert_usd_cents(product.price_cents, rate)
+            for language, rate in currency_rates.items()
         }
         for key, product in products.items()
     }

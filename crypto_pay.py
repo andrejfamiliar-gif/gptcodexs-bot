@@ -108,7 +108,13 @@ class CryptoPayClient:
             try:
                 result = await self.request("getExchangeRates")
             except (CryptoPayError, aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                logger.warning("could not refresh exchange rates: %s", exc)
+                # Some test transports and proxy exceptions do not implement a
+                # safe ``__str__``. The class name is enough for diagnostics and
+                # cannot make the fallback path fail while logging.
+                logger.warning(
+                    "could not refresh exchange rates: %s",
+                    type(exc).__name__,
+                )
                 return dict(self._rates), self._rates_at
 
             target = fiat.upper()

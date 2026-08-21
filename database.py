@@ -46,6 +46,7 @@ class Database:
                 price_usd_cents INTEGER NOT NULL,
                 price_rub_cents INTEGER NOT NULL,
                 price_cny_cents INTEGER NOT NULL,
+                discount_percent INTEGER NOT NULL DEFAULT 0,
                 display_stock INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
@@ -105,6 +106,39 @@ class Database:
                 FOREIGN KEY(user_id) REFERENCES users(user_id)
             );
 
+            -- Storefront sections. Products carry a category slug; this table
+            -- gives the slug a title and an order, so the owner can add or
+            -- rename a section without a code change.
+            CREATE TABLE IF NOT EXISTS categories (
+                slug TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 100,
+                created_at TEXT NOT NULL
+            );
+
+            -- Funnel events, one row per step a user takes. Kept as raw rows
+            -- rather than counters so a new statistic can be derived later from
+            -- history that was already recorded.
+            CREATE TABLE IF NOT EXISTS events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                event TEXT NOT NULL,
+                detail TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            -- Referral commission, one row per paid order. The order id is
+            -- unique, which is what stops a retried settlement from paying the
+            -- same commission twice.
+            CREATE TABLE IF NOT EXISTS referral_payouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_id INTEGER NOT NULL UNIQUE,
+                referrer_id INTEGER NOT NULL,
+                buyer_id INTEGER NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
             -- Crypto transfers made straight to one of our wallet addresses,
             -- outside Crypto Pay. Nothing here is credited automatically: a row
             -- stays 'pending' until an admin checks the tx hash on an explorer
@@ -137,6 +171,49 @@ class Database:
                 ON manual_payments(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_manual_payments_user
                 ON manual_payments(user_id, status);
+            CREATE INDEX IF NOT EXISTS idx_events_event ON events(event, created_at);
+            CREATE INDEX IF NOT EXISTS idx_events_user ON events(user_id, event);
+            CREATE INDEX IF NOT EXISTS idx_referral_payouts_referrer
+                ON referral_payouts(referrer_id);
+
+            -- One extra campaign reward per referred buyer and campaign.
+            CREATE TABLE IF NOT EXISTS referral_campaign_rewards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_key TEXT NOT NULL,
+                referrer_id INTEGER NOT NULL,
+                buyer_id INTEGER NOT NULL,
+                trigger_order_id INTEGER NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(campaign_key, buyer_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_referral_campaign_referrer
+                ON referral_campaign_rewards(referrer_id);
+
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS support_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                sender_role TEXT NOT NULL,
+                sender_id INTEGER NOT NULL,
+                body TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(ticket_id) REFERENCES support_tickets(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_support_tickets_status
+                ON support_tickets(status, updated_at);
+            CREATE INDEX IF NOT EXISTS idx_support_messages_ticket
+                ON support_messages(ticket_id, created_at);
             """
         )
         order_columns = {
@@ -145,9 +222,16 @@ class Database:
         user_columns = {
             str(row["name"]) for row in await self._fetchall("PRAGMA table_info(users)")
         }
+        product_columns = {
+            str(row["name"]) for row in await self._fetchall("PRAGMA table_info(products)")
+        }
         if "purchase_notifications" not in user_columns:
             await self.connection.execute(
                 "ALTER TABLE users ADD COLUMN purchase_notifications INTEGER NOT NULL DEFAULT 1"
+            )
+        if "discount_percent" not in product_columns:
+            await self.connection.execute(
+                "ALTER TABLE products ADD COLUMN discount_percent INTEGER NOT NULL DEFAULT 0"
             )
         if "quantity" not in order_columns:
             await self.connection.execute(
@@ -202,6 +286,19 @@ class Database:
         async with self.lock:
             for key, product in products.items():
                 prices = regional_prices.get(key, {})
+                category = str(getattr(product, "category", "catalog") or "catalog")
+                await self._conn().execute(
+                    """
+                    INSERT OR IGNORE INTO categories(slug, title, position, created_at)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        category,
+                        category.replace("_", " ").strip().title() or "Catalog",
+                        100,
+                        utc_now(),
+                    ),
+                )
                 await self._conn().execute(
                     """
                     INSERT OR IGNORE INTO products(
@@ -212,7 +309,7 @@ class Database:
                     """,
                     (
                         key,
-                        getattr(product, "category", "catalog"),
+                        category,
                         product.title.get("ru", key),
                         product.title.get("en", key),
                         product.title.get("zh", key),
@@ -232,6 +329,7 @@ class Database:
             f"""
             SELECT product_key, category, title_ru, title_en, title_zh,
                    price_usd_cents, price_rub_cents, price_cny_cents,
+                   discount_percent,
                    display_stock, enabled, created_at, updated_at
             FROM products
             {where}
@@ -254,13 +352,52 @@ class Database:
             raise ValueError("product prices must be positive")
         now = utc_now()
         async with self.lock:
+            await self._conn().execute(
+                """
+                INSERT OR IGNORE INTO categories(slug, title, position, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    category,
+                    category.replace("_", " ").strip().title() or "Catalog",
+                    100,
+                    now,
+                ),
+            )
+            existing = await self._fetchone(
+                "SELECT enabled FROM products WHERE product_key = ?",
+                (product_key,),
+            )
+            if existing is not None and int(existing["enabled"]) == 0:
+                cursor = await self._conn().execute(
+                    """
+                    UPDATE products
+                    SET category = ?, title_ru = ?, title_en = ?, title_zh = ?,
+                        price_usd_cents = ?, price_rub_cents = ?, price_cny_cents = ?,
+                        discount_percent = 0, display_stock = 0, enabled = 1, updated_at = ?
+                    WHERE product_key = ?
+                    """,
+                    (
+                        category,
+                        title_ru,
+                        title_en,
+                        title_zh,
+                        price_usd_cents,
+                        price_rub_cents,
+                        price_cny_cents,
+                        now,
+                        product_key,
+                    ),
+                )
+                await self._conn().commit()
+                return cursor.rowcount == 1
             cursor = await self._conn().execute(
                 """
                 INSERT OR IGNORE INTO products(
                     product_key, category, title_ru, title_en, title_zh,
                     price_usd_cents, price_rub_cents, price_cny_cents,
-                    display_stock, enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?, ?)
+                    discount_percent, display_stock, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 1, ?, ?)
                 """,
                 (
                     product_key,
@@ -295,6 +432,45 @@ class Database:
                 WHERE product_key = ? AND enabled = 1
                 """,
                 (price_usd_cents, price_rub_cents, price_cny_cents, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def update_product_usd_price(self, product_key: str, price_usd_cents: int) -> bool:
+        """Change the source price used to derive every buyer currency.
+
+        The storefront keeps one authoritative price in USD. Regional figures
+        are calculated from the configured exchange rates when the runtime
+        syncs, so an admin does not have to maintain five copies of one price.
+        The older ``update_product_prices`` method remains for database
+        compatibility with the smoke test and older integrations.
+        """
+        if price_usd_cents <= 0:
+            raise ValueError("product prices must be positive")
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE products
+                SET price_usd_cents = ?, updated_at = ?
+                WHERE product_key = ? AND enabled = 1
+                """,
+                (price_usd_cents, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def update_product_discount(self, product_key: str, percent: int) -> bool:
+        """Set the product discount, keeping at least one cent payable."""
+        if percent < 0 or percent > 99:
+            raise ValueError("discount must be between 0 and 99 percent")
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE products
+                SET discount_percent = ?, updated_at = ?
+                WHERE product_key = ? AND enabled = 1
+                """,
+                (percent, utc_now(), product_key),
             )
             await self._conn().commit()
             return cursor.rowcount == 1
@@ -363,6 +539,134 @@ class Database:
         return await self._fetchall(
             "SELECT user_id, language FROM users ORDER BY user_id"
         )
+
+    async def create_support_ticket(self, user_id: int, body: str) -> int:
+        """Create an open ticket and its first user message atomically."""
+        body = body.strip()
+        if not body:
+            raise ValueError("support ticket message cannot be empty")
+        async with self.lock:
+            now = utc_now()
+            cursor = await self._conn().execute(
+                """
+                INSERT INTO support_tickets(user_id, status, created_at, updated_at)
+                VALUES (?, 'open', ?, ?)
+                """,
+                (user_id, now, now),
+            )
+            ticket_id = int(cursor.lastrowid)
+            await self._conn().execute(
+                """
+                INSERT INTO support_messages(ticket_id, sender_role, sender_id, body, created_at)
+                VALUES (?, 'user', ?, ?, ?)
+                """,
+                (ticket_id, user_id, body, now),
+            )
+            await self._conn().commit()
+            return ticket_id
+
+    async def get_support_ticket(self, ticket_id: int) -> aiosqlite.Row | None:
+        return await self._fetchone(
+            """
+            SELECT t.id, t.user_id, t.status, t.created_at, t.updated_at,
+                   u.username, u.language
+            FROM support_tickets t
+            LEFT JOIN users u ON u.user_id = t.user_id
+            WHERE t.id = ?
+            """,
+            (ticket_id,),
+        )
+
+    async def list_support_tickets(
+        self,
+        status: str = "open",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT t.id, t.user_id, t.status, t.created_at, t.updated_at,
+                   u.username, u.language,
+                   (
+                       SELECT body FROM support_messages sm
+                       WHERE sm.ticket_id = t.id
+                       ORDER BY sm.id DESC LIMIT 1
+                   ) AS last_body
+            FROM support_tickets t
+            LEFT JOIN users u ON u.user_id = t.user_id
+            WHERE t.status = ?
+            ORDER BY t.updated_at DESC, t.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (status, max(1, min(limit, 100)), max(0, offset)),
+        )
+
+    async def count_support_tickets(self, status: str = "open") -> int:
+        row = await self._fetchone(
+            "SELECT COUNT(*) AS total FROM support_tickets WHERE status = ?",
+            (status,),
+        )
+        return int(row["total"]) if row is not None else 0
+
+    async def list_support_messages(self, ticket_id: int) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT id, ticket_id, sender_role, sender_id, body, created_at
+            FROM support_messages
+            WHERE ticket_id = ?
+            ORDER BY id
+            """,
+            (ticket_id,),
+        )
+
+    async def add_support_message(
+        self,
+        ticket_id: int,
+        sender_role: str,
+        sender_id: int,
+        body: str,
+    ) -> bool:
+        body = body.strip()
+        if not body or sender_role not in {"user", "admin"}:
+            return False
+        async with self.lock:
+            now = utc_now()
+            updated = await self._conn().execute(
+                """
+                UPDATE support_tickets
+                SET updated_at = ?
+                WHERE id = ? AND status = 'open'
+                """,
+                (now, ticket_id),
+            )
+            if updated.rowcount != 1:
+                await self._conn().rollback()
+                return False
+            await self._conn().execute(
+                """
+                INSERT INTO support_messages(ticket_id, sender_role, sender_id, body, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (ticket_id, sender_role, sender_id, body, now),
+            )
+            await self._conn().commit()
+            return True
+
+    async def close_support_ticket(self, ticket_id: int) -> aiosqlite.Row | None:
+        async with self.lock:
+            row = await self._fetchone(
+                "SELECT id, user_id, status FROM support_tickets WHERE id = ?",
+                (ticket_id,),
+            )
+            if row is None or str(row["status"]) == "closed":
+                await self._conn().rollback()
+                return None
+            await self._conn().execute(
+                "UPDATE support_tickets SET status = 'closed', updated_at = ? WHERE id = ?",
+                (utc_now(), ticket_id),
+            )
+            await self._conn().commit()
+            return row
 
     async def get_purchase_notifications(self, user_id: int) -> bool:
         row = await self._fetchone(
@@ -594,6 +898,29 @@ class Database:
             return None
         return [str(good["payload"]) for good in goods]
 
+    async def _consume_display_stock_in_transaction(
+        self,
+        connection: aiosqlite.Connection,
+        product_key: str,
+        quantity: int,
+    ) -> None:
+        """Lower the one storefront stock counter as part of settlement.
+
+        It is deliberately independent of whether a payload is immediately
+        available. A paid order without a payload is a preorder, so its units
+        are still reserved and must not remain advertised as available.
+        """
+        if quantity < 1 or product_key == "balance_topup":
+            return
+        await connection.execute(
+            """
+            UPDATE products
+            SET display_stock = MAX(0, display_stock - ?), updated_at = ?
+            WHERE product_key = ?
+            """,
+            (quantity, utc_now(), product_key),
+        )
+
     async def settle_paid_order(
         self,
         order_id: int,
@@ -641,6 +968,11 @@ class Database:
                     order,
                     now,
                     decrement_stock,
+                )
+                await self._consume_display_stock_in_transaction(
+                    connection,
+                    str(order["product_key"]),
+                    int(order["quantity"] or 1),
                 )
                 if payloads is None:
                     await connection.execute(
@@ -738,6 +1070,11 @@ class Database:
                     order,
                     now,
                     decrement_stock,
+                )
+                await self._consume_display_stock_in_transaction(
+                    connection,
+                    str(order["product_key"]),
+                    int(order["quantity"] or 1),
                 )
                 if payloads is None:
                     await connection.execute(
@@ -865,10 +1202,24 @@ class Database:
             await self._conn().commit()
 
     async def add_good(self, product_key: str, payload: str) -> int:
+        """Load one account and raise the storefront counter with it.
+
+        The counter is the single stock figure, so accounts arriving have to move
+        it: otherwise the owner would load ten accounts, the shop would keep
+        offering none, and the ten would sit unsold.
+        """
         async with self.lock:
             cursor = await self._conn().execute(
                 "INSERT INTO goods(product_key, payload, created_at) VALUES (?, ?, ?)",
                 (product_key, payload, utc_now()),
+            )
+            await self._conn().execute(
+                """
+                UPDATE products
+                SET display_stock = MAX(0, display_stock) + 1, updated_at = ?
+                WHERE product_key = ?
+                """,
+                (utc_now(), product_key),
             )
             await self._conn().commit()
             return int(cursor.lastrowid)
@@ -887,30 +1238,43 @@ class Database:
 
     async def remove_good(self, good_id: int) -> bool:
         async with self.lock:
+            good = await self._fetchone(
+                "SELECT product_key FROM goods WHERE id = ? AND status = 'available'",
+                (good_id,),
+            )
+            if good is None:
+                await self._conn().commit()
+                return False
             cursor = await self._conn().execute(
                 "UPDATE goods SET status = 'removed' WHERE id = ? AND status = 'available'",
                 (good_id,),
             )
+            if cursor.rowcount == 1:
+                await self._conn().execute(
+                    """
+                    UPDATE products
+                    SET display_stock = MAX(0, display_stock - 1), updated_at = ?
+                    WHERE product_key = ?
+                    """,
+                    (utc_now(), str(good["product_key"])),
+                )
             await self._conn().commit()
             return cursor.rowcount == 1
 
     async def available_stock(self) -> dict[str, int]:
+        """What the storefront offers, one number per product.
+
+        That number is the counter the owner sets in the admin panel and nothing
+        else. Loading accounts raises it, a sale lowers it, and the owner can
+        overrule both — so there is a single figure to reason about instead of a
+        display value and a real value that can disagree. Whether an order can be
+        handed over immediately is a separate question, answered by the goods
+        table at delivery time.
+        """
         rows = await self._fetchall(
-            """
-            SELECT p.product_key,
-                   p.display_stock,
-                   COUNT(g.id) AS real_stock
-            FROM products p
-            LEFT JOIN goods g
-              ON g.product_key = p.product_key AND g.status = 'available'
-            WHERE p.enabled = 1
-            GROUP BY p.product_key, p.display_stock
-            """
+            "SELECT product_key, display_stock FROM products WHERE enabled = 1"
         )
-        return {
-            str(row["product_key"]): max(int(row["display_stock"]), int(row["real_stock"]))
-            for row in rows
-        }
+        return {str(row["product_key"]): max(0, int(row["display_stock"])) for row in rows}
 
     async def actual_stock(self) -> dict[str, int]:
         rows = await self._fetchall(
@@ -930,11 +1294,21 @@ class Database:
         return {str(row["product_key"]): int(row["display_stock"]) for row in rows}
 
     async def add_waitlist_entry(self, user_id: int, product_key: str) -> bool:
+        """Subscribe to "back in stock", or re-subscribe after a past notice.
+
+        ``INSERT OR IGNORE`` alone left an already-notified row in place, so a
+        buyer who used the button once was never told again — the second tap
+        silently did nothing. Re-activating on conflict is what makes the button
+        work every time.
+        """
         async with self.lock:
             cursor = await self._conn().execute(
                 """
-                INSERT OR IGNORE INTO waitlist(user_id, product_key, status, created_at)
+                INSERT INTO waitlist(user_id, product_key, status, created_at)
                 VALUES (?, ?, 'active', ?)
+                ON CONFLICT(user_id, product_key) DO UPDATE
+                SET status = 'active', created_at = excluded.created_at
+                WHERE waitlist.status <> 'active'
                 """,
                 (user_id, product_key, utc_now()),
             )
@@ -1244,3 +1618,483 @@ class Database:
             """,
             (user_id,),
         )
+
+    # ------------------------------------------------------------------
+    # Categories
+    # ------------------------------------------------------------------
+
+    async def list_categories(self) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            "SELECT slug, title, position FROM categories ORDER BY position, title"
+        )
+
+    async def create_category(self, slug: str, title: str, position: int = 100) -> bool:
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                INSERT OR IGNORE INTO categories(slug, title, position, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (slug, title, position, utc_now()),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def rename_category(self, slug: str, title: str) -> bool:
+        async with self.lock:
+            cursor = await self._conn().execute(
+                "UPDATE categories SET title = ? WHERE slug = ?",
+                (title, slug),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def delete_category(self, slug: str, move_to: str | None = "catalog") -> int:
+        """Drop a section and move whatever was in it somewhere else.
+
+        Products are moved rather than deleted: a category is a shelf, and
+        removing the shelf must not throw away the goods on it. ``move_to`` may
+        be ``None`` only for an empty section — there is then nothing to move,
+        and demanding a destination would block deleting the last category.
+        """
+        if slug == move_to:
+            raise ValueError("cannot move products into the category being deleted")
+        async with self.lock:
+            await self._conn().execute("BEGIN IMMEDIATE")
+            try:
+                occupied = await self._fetchone(
+                    "SELECT COUNT(*) AS total FROM products WHERE category = ?", (slug,)
+                )
+                if occupied is not None and int(occupied["total"]) and move_to is None:
+                    raise ValueError("this category still holds products; give a destination")
+                moved = 0
+                if move_to is not None:
+                    cursor = await self._conn().execute(
+                        "UPDATE products SET category = ?, updated_at = ? WHERE category = ?",
+                        (move_to, utc_now(), slug),
+                    )
+                    moved = cursor.rowcount
+                await self._conn().execute("DELETE FROM categories WHERE slug = ?", (slug,))
+            except Exception:
+                await self._conn().rollback()
+                raise
+            await self._conn().commit()
+            return moved
+
+    async def set_product_category(self, product_key: str, category: str) -> bool:
+        async with self.lock:
+            cursor = await self._conn().execute(
+                "UPDATE products SET category = ?, updated_at = ? WHERE product_key = ?",
+                (category, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def count_products_in_category(self, slug: str) -> int:
+        row = await self._fetchone(
+            "SELECT COUNT(*) AS total FROM products WHERE enabled = 1 AND category = ?",
+            (slug,),
+        )
+        return int(row["total"]) if row is not None else 0
+
+    # ------------------------------------------------------------------
+    # Product management
+    # ------------------------------------------------------------------
+
+    async def rename_product(self, product_key: str, title: str) -> bool:
+        """One title for every language: a product name is a brand name."""
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE products
+                SET title_ru = ?, title_en = ?, title_zh = ?, updated_at = ?
+                WHERE product_key = ?
+                """,
+                (title, title, title, utc_now(), product_key),
+            )
+            await self._conn().commit()
+            return cursor.rowcount == 1
+
+    async def delete_product(self, product_key: str) -> bool:
+        """Take a product off sale without erasing its history.
+
+        The row is disabled rather than deleted, because past orders point at it
+        and a buyer's receipt should not turn into a bare product key. Unsold
+        accounts are withdrawn with it, and the counter goes to zero.
+        """
+        async with self.lock:
+            cursor = await self._conn().execute(
+                """
+                UPDATE products
+                SET enabled = 0, display_stock = 0, updated_at = ?
+                WHERE product_key = ? AND enabled = 1
+                """,
+                (utc_now(), product_key),
+            )
+            if cursor.rowcount != 1:
+                await self._conn().commit()
+                return False
+            await self._conn().execute(
+                "UPDATE goods SET status = 'removed' WHERE product_key = ? AND status = 'available'",
+                (product_key,),
+            )
+            await self._conn().commit()
+            return True
+
+    async def consume_display_stock(self, product_key: str, quantity: int) -> None:
+        """Lower the storefront counter after a sale, never below zero."""
+        if quantity < 1:
+            return
+        async with self.lock:
+            await self._conn().execute(
+                """
+                UPDATE products
+                SET display_stock = MAX(0, display_stock - ?), updated_at = ?
+                WHERE product_key = ?
+                """,
+                (quantity, utc_now(), product_key),
+            )
+            await self._conn().commit()
+
+    # ------------------------------------------------------------------
+    # Funnel events and statistics
+    # ------------------------------------------------------------------
+
+    async def track_event(self, user_id: int, event: str, detail: str | None = None) -> None:
+        """Record one funnel step. Never raises: a lost statistic is not worth
+        breaking the handler a buyer is standing in."""
+        try:
+            async with self.lock:
+                await self._conn().execute(
+                    "INSERT INTO events(user_id, event, detail, created_at) VALUES (?, ?, ?, ?)",
+                    (user_id, event, detail, utc_now()),
+                )
+                await self._conn().commit()
+        except Exception:
+            pass
+
+    async def event_counts(self, since: str | None = None) -> dict[str, tuple[int, int]]:
+        """Per event: how many times it happened and how many distinct people."""
+        where = "WHERE created_at >= ?" if since else ""
+        params: tuple[Any, ...] = (since,) if since else ()
+        rows = await self._fetchall(
+            f"""
+            SELECT event, COUNT(*) AS total, COUNT(DISTINCT user_id) AS people
+            FROM events
+            {where}
+            GROUP BY event
+            """,
+            params,
+        )
+        return {str(row["event"]): (int(row["total"]), int(row["people"])) for row in rows}
+
+    async def order_stats(self) -> dict[str, int]:
+        """Paid orders, units and revenue in USD cents, plus what is waiting."""
+        row = await self._fetchone(
+            """
+            SELECT
+                COUNT(*) AS paid_orders,
+                COALESCE(SUM(quantity), 0) AS units,
+                COALESCE(SUM(COALESCE(balance_amount_cents, amount_cents)), 0) AS revenue,
+                COUNT(DISTINCT user_id) AS buyers
+            FROM orders
+            WHERE status = 'paid' AND order_type = 'product'
+            """
+        )
+        waiting = await self._fetchone(
+            """
+            SELECT COUNT(*) AS total FROM orders
+            WHERE status = 'paid' AND delivery_status = 'waiting_stock'
+            """
+        )
+        topups = await self._fetchone(
+            """
+            SELECT COUNT(*) AS total,
+                   COALESCE(SUM(amount_cents), 0) AS amount
+            FROM orders
+            WHERE status = 'paid' AND product_key = 'balance_topup'
+            """
+        )
+        return {
+            "paid_orders": int(row["paid_orders"]) if row else 0,
+            "units": int(row["units"]) if row else 0,
+            "revenue_cents": int(row["revenue"]) if row else 0,
+            "buyers": int(row["buyers"]) if row else 0,
+            "waiting_stock": int(waiting["total"]) if waiting else 0,
+            "topup_orders": int(topups["total"]) if topups else 0,
+            "topup_cents": int(topups["amount"]) if topups else 0,
+        }
+
+    async def paid_orders_by_product(self, limit: int = 10) -> list[aiosqlite.Row]:
+        return await self._fetchall(
+            """
+            SELECT product_key,
+                   COUNT(*) AS orders,
+                   COALESCE(SUM(quantity), 0) AS units
+            FROM orders
+            WHERE status = 'paid' AND order_type = 'product'
+            GROUP BY product_key
+            ORDER BY units DESC, orders DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
+    async def manual_payment_stats(self) -> dict[str, int]:
+        rows = await self._fetchall(
+            "SELECT status, COUNT(*) AS total FROM manual_payments GROUP BY status"
+        )
+        return {str(row["status"]): int(row["total"]) for row in rows}
+
+    async def count_users_since(self, since: str) -> int:
+        row = await self._fetchone(
+            "SELECT COUNT(*) AS total FROM users WHERE created_at >= ?",
+            (since,),
+        )
+        return int(row["total"]) if row is not None else 0
+
+    async def users_by_language(self) -> dict[str, int]:
+        rows = await self._fetchall(
+            """
+            SELECT COALESCE(language, '—') AS language, COUNT(*) AS total
+            FROM users
+            GROUP BY COALESCE(language, '—')
+            ORDER BY total DESC
+            """
+        )
+        return {str(row["language"]): int(row["total"]) for row in rows}
+
+    async def waitlist_counts(self) -> dict[str, int]:
+        rows = await self._fetchall(
+            """
+            SELECT product_key, COUNT(*) AS total
+            FROM waitlist
+            WHERE status = 'active'
+            GROUP BY product_key
+            """
+        )
+        return {str(row["product_key"]): int(row["total"]) for row in rows}
+
+    async def balance_total_cents(self) -> int:
+        row = await self._fetchone("SELECT COALESCE(SUM(balance_cents), 0) AS total FROM users")
+        return int(row["total"]) if row is not None else 0
+
+    # ------------------------------------------------------------------
+    # Referral commission
+    # ------------------------------------------------------------------
+
+    async def credit_referral(
+        self,
+        order_id: int,
+        buyer_id: int,
+        amount_cents: int,
+        percent: int,
+    ) -> dict[str, int] | None:
+        """Pay the inviter their cut of one order, at most once.
+
+        Returns ``None`` when there is nothing to pay: no inviter, a
+        self-referral, a commission that rounds to zero, or an order that has
+        already paid out. The unique index on ``order_id`` is what makes a
+        retried settlement safe — the second attempt loses the insert and the
+        balance is left alone.
+        """
+        if amount_cents <= 0 or percent <= 0:
+            return None
+        async with self.lock:
+            buyer = await self._fetchone(
+                "SELECT referrer_id FROM users WHERE user_id = ?",
+                (buyer_id,),
+            )
+            if buyer is None or buyer["referrer_id"] is None:
+                return None
+            referrer_id = int(buyer["referrer_id"])
+            if referrer_id == buyer_id:
+                return None
+            referrer = await self._fetchone(
+                "SELECT user_id FROM users WHERE user_id = ?",
+                (referrer_id,),
+            )
+            if referrer is None:
+                return None
+            bonus = amount_cents * percent // 100
+            if bonus <= 0:
+                return None
+            connection = self._conn()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = await connection.execute(
+                    """
+                    INSERT OR IGNORE INTO referral_payouts(
+                        order_id, referrer_id, buyer_id, amount_cents, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (order_id, referrer_id, buyer_id, bonus, utc_now()),
+                )
+                if cursor.rowcount != 1:
+                    await connection.rollback()
+                    return None
+                await connection.execute(
+                    """
+                    UPDATE users
+                    SET balance_cents = balance_cents + ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (bonus, utc_now(), referrer_id),
+                )
+                balance = await self._fetchone(
+                    "SELECT balance_cents FROM users WHERE user_id = ?",
+                    (referrer_id,),
+                )
+                await connection.commit()
+            except Exception:
+                await connection.rollback()
+                raise
+            return {
+                "referrer_id": referrer_id,
+                "bonus_cents": bonus,
+                "balance_cents": int(balance["balance_cents"]) if balance else bonus,
+            }
+
+    async def referral_summary(self, user_id: int) -> dict[str, int]:
+        invited = await self._fetchone(
+            "SELECT COUNT(*) AS total FROM users WHERE referrer_id = ?",
+            (user_id,),
+        )
+        earned = await self._fetchone(
+            """
+            SELECT COUNT(*) AS orders, COALESCE(SUM(amount_cents), 0) AS total
+            FROM referral_payouts
+            WHERE referrer_id = ?
+            """,
+            (user_id,),
+        )
+        return {
+            "invited": int(invited["total"]) if invited else 0,
+            "paid_orders": int(earned["orders"]) if earned else 0,
+            "earned_cents": int(earned["total"]) if earned else 0,
+        }
+
+    async def referral_totals(self) -> dict[str, int]:
+        row = await self._fetchone(
+            """
+            SELECT COUNT(*) AS payouts,
+                   COALESCE(SUM(amount_cents), 0) AS total,
+                   COUNT(DISTINCT referrer_id) AS earners
+            FROM referral_payouts
+            """
+        )
+        invited = await self._fetchone(
+            "SELECT COUNT(*) AS total FROM users WHERE referrer_id IS NOT NULL"
+        )
+        return {
+            "payouts": int(row["payouts"]) if row else 0,
+            "total_cents": int(row["total"]) if row else 0,
+            "earners": int(row["earners"]) if row else 0,
+            "invited_users": int(invited["total"]) if invited else 0,
+        }
+
+    async def credit_referral_campaign(
+        self,
+        campaign_key: str,
+        order_id: int,
+        buyer_id: int,
+        threshold_cents: int,
+        bonus_cents: int,
+        starts_at: str,
+        ends_at: str,
+    ) -> dict[str, int] | None:
+        """Pay one cumulative referral campaign reward, at most once.
+
+        The qualifying total is calculated from settled product orders whose
+        canonical USD amount is known and whose payment happened before the
+        campaign deadline. The unique campaign/buyer key makes retries safe.
+        """
+        if threshold_cents <= 0 or bonus_cents <= 0:
+            return None
+        async with self.lock:
+            connection = self._conn()
+            await connection.execute("BEGIN IMMEDIATE")
+            try:
+                buyer = await self._fetchone(
+                    "SELECT referrer_id FROM users WHERE user_id = ?",
+                    (buyer_id,),
+                )
+                if buyer is None or buyer["referrer_id"] is None:
+                    await connection.rollback()
+                    return None
+                referrer_id = int(buyer["referrer_id"])
+                if referrer_id == buyer_id:
+                    await connection.rollback()
+                    return None
+                referrer = await self._fetchone(
+                    "SELECT user_id FROM users WHERE user_id = ?",
+                    (referrer_id,),
+                )
+                current = await self._fetchone(
+                    "SELECT status, paid_at FROM orders WHERE id = ? AND user_id = ?",
+                    (order_id, buyer_id),
+                )
+                if (
+                    referrer is None
+                    or current is None
+                    or str(current["status"]) != "paid"
+                    or not current["paid_at"]
+                    or str(current["paid_at"]) < starts_at
+                    or str(current["paid_at"]) > ends_at
+                ):
+                    await connection.rollback()
+                    return None
+
+                total_row = await self._fetchone(
+                    """
+                    SELECT COALESCE(SUM(COALESCE(balance_amount_cents, amount_cents)), 0) AS total
+                    FROM orders
+                    WHERE user_id = ?
+                      AND status = 'paid'
+                      AND order_type = 'product'
+                      AND paid_at IS NOT NULL
+                      AND paid_at >= ?
+                      AND paid_at <= ?
+                    """,
+                    (buyer_id, starts_at, ends_at),
+                )
+                total_cents = int(total_row["total"]) if total_row else 0
+                if total_cents < threshold_cents:
+                    await connection.rollback()
+                    return None
+
+                cursor = await connection.execute(
+                    """
+                    INSERT OR IGNORE INTO referral_campaign_rewards(
+                        campaign_key, referrer_id, buyer_id, trigger_order_id,
+                        amount_cents, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (campaign_key, referrer_id, buyer_id, order_id, bonus_cents, utc_now()),
+                )
+                if cursor.rowcount != 1:
+                    await connection.rollback()
+                    return None
+                await connection.execute(
+                    """
+                    UPDATE users
+                    SET balance_cents = balance_cents + ?, updated_at = ?
+                    WHERE user_id = ?
+                    """,
+                    (bonus_cents, utc_now(), referrer_id),
+                )
+                balance = await self._fetchone(
+                    "SELECT balance_cents FROM users WHERE user_id = ?",
+                    (referrer_id,),
+                )
+                await connection.commit()
+                return {
+                    "referrer_id": referrer_id,
+                    "buyer_id": buyer_id,
+                    "bonus_cents": bonus_cents,
+                    "total_cents": total_cents,
+                    "balance_cents": int(balance["balance_cents"]) if balance else bonus_cents,
+                }
+            except Exception:
+                await connection.rollback()
+                raise

@@ -87,6 +87,10 @@ async def test_catalog(db: Database) -> None:
     check("price change applies", await db.update_product_prices("promo_x", 250, 22000, 1750) is True)
     check("price change on unknown key reports failure",
           await db.update_product_prices("no_such_key", 250, 22000, 1750) is False)
+    check("per-product discount saves", await db.update_product_discount("promo_x", 20) is True)
+    discounted = (await db.list_products())
+    promo_row = next(row for row in discounted if row["product_key"] == "promo_x")
+    check("per-product discount survives reload", int(promo_row["discount_percent"]) == 20)
 
     check("display stock +5", await db.adjust_display_stock("promo_x", 5) == (0, 5))
     check("display stock clamps at zero", (await db.adjust_display_stock("promo_x", -99))[1] == 0)
@@ -112,6 +116,20 @@ async def test_users(db: Database) -> None:
     await db.set_purchase_notifications(1001, True)
     check("notifications turn back on", await db.get_purchase_notifications(1001) is True)
 
+    ticket_id = await db.create_support_ticket(1001, "Smoke support question")
+    check("support ticket created", ticket_id > 0)
+    check("open support ticket counted", await db.count_support_tickets() == 1)
+    check(
+        "support ticket stores message",
+        (await db.list_support_messages(ticket_id))[0]["body"] == "Smoke support question",
+    )
+    check(
+        "support reply stored",
+        await db.add_support_message(ticket_id, "admin", 7, "Smoke reply") is True,
+    )
+    check("support ticket closed", await db.close_support_ticket(ticket_id) is not None)
+    check("closed ticket excluded", await db.count_support_tickets() == 0)
+
 
 async def test_stock_semantics(db: Database) -> None:
     print("\n[stock semantics]")
@@ -123,6 +141,55 @@ async def test_stock_semantics(db: Database) -> None:
     check("display counter shows in available", available.get("pro_5x", 0) == 4, str(available))
     await db.add_good("pro_5x", "smoke-test-payload-not-a-real-account")
     check("real payload counted", (await db.actual_stock()).get("pro_5x") == 1)
+
+
+async def test_paid_order_consumes_counter_and_referral_uses_usd(db: Database) -> None:
+    print("\n[settlement semantics]")
+    await db.ensure_user(4004, "Referrer")
+    await db.ensure_user(4005, "Buyer", referrer_id=4004)
+    await db.add_good("plus_nw", "smoke-test-delivery-payload")
+    after_load = (await db.available_stock()).get("plus_nw", 0)
+    order_id = await db.create_order(
+        user_id=4005,
+        product_key="plus_nw",
+        amount_cents=720,
+        balance_amount_cents=500,
+        order_token="smoke-settlement-order",
+        invoice_id="smoke-settlement-invoice",
+    )
+    settled = await db.settle_paid_order(order_id, decrement_stock=True)
+    check("paid order settles", settled is not None and settled["delivery_status"] == "pending")
+    check(
+        "one counter unit is consumed",
+        (await db.available_stock()).get("plus_nw", 0) == after_load - 1,
+        str(await db.available_stock()),
+    )
+    payout = await db.credit_referral(order_id, 4005, 500, 15)
+    check("referral is based on USD cents", payout is not None and payout["bonus_cents"] == 75)
+    check("referral balance is credited", await db.get_balance_cents(4004) == 75)
+    campaign = await db.credit_referral_campaign(
+        campaign_key="smoke_campaign",
+        order_id=order_id,
+        buyer_id=4005,
+        threshold_cents=500,
+        bonus_cents=100,
+        starts_at="2000-01-01T00:00:00+00:00",
+        ends_at="2999-12-31T23:59:59+00:00",
+    )
+    check("referral campaign pays once", campaign is not None and campaign["bonus_cents"] == 100)
+    check("referral campaign balance credited", await db.get_balance_cents(4004) == 175)
+    check(
+        "referral campaign retry is ignored",
+        await db.credit_referral_campaign(
+            campaign_key="smoke_campaign",
+            order_id=order_id,
+            buyer_id=4005,
+            threshold_cents=500,
+            bonus_cents=100,
+            starts_at="2000-01-01T00:00:00+00:00",
+            ends_at="2999-12-31T23:59:59+00:00",
+        ) is None,
+    )
 
 
 async def test_manual_payments(db: Database) -> None:
@@ -444,6 +511,7 @@ async def main() -> int:
             await test_catalog(db)
             await test_users(db)
             await test_stock_semantics(db)
+            await test_paid_order_consumes_counter_and_referral_uses_usd(db)
             await test_manual_payments(db)
         finally:
             await db.close()

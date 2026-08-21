@@ -19,6 +19,10 @@ LANGUAGE_BUTTONS = (
     ("hi", "🇮🇳 हिन्दी"),
 )
 
+# The same labels keyed by code, for screens that name the current language
+# rather than offering a choice of them.
+LANGUAGE_NAMES = dict(LANGUAGE_BUTTONS)
+
 
 def _pick(labels: dict[str, _T], language: str) -> _T:
     """Look up a per-language label, falling back to English.
@@ -92,10 +96,12 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Top-up invoice created: {amount}\nCrypto Pay invoice: {usd_amount}\nTap the button below to pay.\nYour balance will update automatically after payment.",
         "ru": "Счёт на пополнение создан: {amount}\nСчёт Crypto Pay: {usd_amount}\nНажмите кнопку ниже для оплаты.\nПосле оплаты баланс обновится автоматически.",
     },
+    # Just the question. The two buttons below it are named plainly enough that
+    # spelling out what each one does only adds a wall of text over the choice.
     "mpay_method": {
-        "zh": "请选择支付方式，金额 {amount}：\n\n• Crypto Pay — 自动入账，速度最快。\n• 加密货币转账 — 直接转到我们的钱包，管理员核对后入账。",
-        "en": "Choose how to pay {amount}:\n\n• Crypto Pay — credited automatically, fastest.\n• Crypto transfer — send straight to our wallet; an admin verifies it and then credits you.",
-        "ru": "Выберите способ оплаты на сумму {amount}:\n\n• Crypto Pay — зачисление автоматическое, это быстрее всего.\n• Перевод криптовалютой — напрямую на наш кошелёк, админ сверяет перевод и зачисляет.",
+        "zh": "请选择支付方式，金额 {amount}：",
+        "en": "Choose how to pay {amount}:",
+        "ru": "Выберите способ оплаты на сумму {amount}:",
     },
     "mpay_choose_asset": {
         "zh": "请选择币种（金额 {amount}）：",
@@ -346,9 +352,9 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "🔄 Проверить оплату",
     },
     "payment_pending": {
-        "zh": "付款尚未确认。完成支付后再次点击检查。",
-        "en": "The payment is not confirmed yet. Complete the payment and check again.",
-        "ru": "Оплата ещё не подтверждена. Завершите оплату и проверьте ещё раз.",
+        "zh": "付款尚未确认。",
+        "en": "The payment is not confirmed yet.",
+        "ru": "Оплата ещё не подтверждена.",
     },
     "payment_expired": {
         "zh": "账单已过期。请重新创建订单。",
@@ -450,20 +456,65 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "📖 Help\n\nSupport: {support}\nUse the buttons below to view the Terms of Sale and Privacy Policy.",
         "ru": "📖 Помощь\n\nПоддержка: {support}\nИспользуйте кнопки ниже, чтобы открыть оферту и политику конфиденциальности.",
     },
+    "support_ticket_button": {
+        "zh": "✉️ 联系客服",
+        "en": "✉️ Contact support",
+        "ru": "✉️ Написать в поддержку",
+    },
+    "support_ticket_prompt": {
+        "zh": "请详细描述你的问题。发送 /cancel 可取消。",
+        "en": "Describe your issue in one message. Send /cancel to cancel.",
+        "ru": "Опиши проблему одним сообщением. Для отмены отправь /cancel.",
+    },
+    "support_ticket_created": {
+        "zh": "✅ 工单 #{ticket_id} 已创建。我们会尽快回复。",
+        "en": "✅ Ticket #{ticket_id} has been created. We will reply as soon as possible.",
+        "ru": "✅ Обращение #{ticket_id} создано. Мы ответим в ближайшее время.",
+    },
+    "support_ticket_message_sent": {
+        "zh": "✅ 消息已添加到工单 #{ticket_id}。",
+        "en": "✅ Your message was added to ticket #{ticket_id}.",
+        "ru": "✅ Сообщение добавлено в обращение #{ticket_id}.",
+    },
+    "support_ticket_reply_button": {
+        "zh": "💬 回复工单",
+        "en": "💬 Reply to ticket",
+        "ru": "💬 Ответить по обращению",
+    },
+    "support_ticket_reply": {
+        "zh": "✉️ 工单 #{ticket_id} 的客服回复：\n\n{body}",
+        "en": "✉️ Support reply for ticket #{ticket_id}:\n\n{body}",
+        "ru": "✉️ Ответ поддержки по обращению #{ticket_id}:\n\n{body}",
+    },
+    "support_ticket_closed": {
+        "zh": "✅ 工单 #{ticket_id} 已关闭。如有新问题，请创建新的工单。",
+        "en": "✅ Ticket #{ticket_id} is closed. Create a new ticket if you need more help.",
+        "ru": "✅ Обращение #{ticket_id} закрыто. Если понадобится помощь, создай новое обращение.",
+    },
+    "support_ticket_already_closed": {
+        "zh": "工单已关闭。",
+        "en": "This ticket is already closed.",
+        "ru": "Это обращение уже закрыто.",
+    },
+    "support_ticket_too_long": {
+        "zh": "消息过长，最多 4000 个字符。",
+        "en": "The message is too long. Maximum: 4000 characters.",
+        "ru": "Сообщение слишком длинное. Максимум — 4000 символов.",
+    },
     "settings": {
         "zh": "⚙️ 设置\n\n购买通知：{status}",
         "en": "⚙️ Settings\n\nPurchase notifications: {status}",
         "ru": "⚙️ Настройки\n\nУведомления о покупках: {status}",
     },
     "notifications_on": {
-        "zh": " включены",
-        "en": " enabled",
-        "ru": " включены",
+        "zh": "已开启",
+        "en": "enabled",
+        "ru": "включены",
     },
     "notifications_off": {
-        "zh": " выключены",
-        "en": " disabled",
-        "ru": " выключены",
+        "zh": "已关闭",
+        "en": "disabled",
+        "ru": "выключены",
     },
     "enable_notifications": {
         "zh": "🔔 开启购买通知",
@@ -482,28 +533,34 @@ TEXTS: dict[str, dict[str, str]] = {
     },
     "purchase_notification": {
         "zh": (
-            "🛍 <b>新订单</b>\n"
-            "━━━━━━━━━━━━\n"
-            "📦 {product}\n"
-            "🔢 {quantity} 个\n"
-            "💵 {price}\n"
-            "👤 {buyer}"
+            "┌─────────────────┐\n"
+            "🛍 <b>有人刚下单了</b>\n"
+            "└─────────────────┘\n"
+            "📦 商品 · <b>{product}</b>\n"
+            "🔢 数量 · <b>{quantity}</b>\n"
+            "💵 金额 · <b>{price}</b>\n"
+            "👤 买家 · <i>{buyer}</i>\n"
+            "└╴ 库存已更新"
         ),
         "en": (
-            "🛍 <b>New purchase</b>\n"
-            "━━━━━━━━━━━━\n"
-            "📦 {product}\n"
-            "🔢 {quantity} pcs\n"
-            "💵 {price}\n"
-            "👤 {buyer}"
+            "┌─────────────────┐\n"
+            "🛍 <b>Someone just bought</b>\n"
+            "└─────────────────┘\n"
+            "📦 Product · <b>{product}</b>\n"
+            "🔢 Quantity · <b>{quantity}</b>\n"
+            "💵 Total · <b>{price}</b>\n"
+            "👤 Buyer · <i>{buyer}</i>\n"
+            "└╴ Stock updated"
         ),
         "ru": (
-            "🛍 <b>Новая покупка</b>\n"
-            "━━━━━━━━━━━━\n"
-            "📦 {product}\n"
-            "🔢 {quantity} шт.\n"
-            "💵 {price}\n"
-            "👤 {buyer}"
+            "┌─────────────────┐\n"
+            "🛍 <b>Только что купили</b>\n"
+            "└─────────────────┘\n"
+            "📦 Товар · <b>{product}</b>\n"
+            "🔢 Количество · <b>{quantity}</b>\n"
+            "💵 Сумма · <b>{price}</b>\n"
+            "👤 Покупатель · <i>{buyer}</i>\n"
+            "└╴ Наличие обновлено"
         ),
     },
     "disable_purchase_notifications": {
@@ -515,22 +572,28 @@ TEXTS: dict[str, dict[str, str]] = {
     # plain "new stock is in" so the broadcast does not double as a price list.
     "stock_replenished": {
         "zh": (
-            "📦 <b>新到货</b>\n"
-            "━━━━━━━━━━━━\n"
-            "商店已上新账号。\n"
-            "打开「商品」查看当前库存。"
+            "╭───────────────╮\n"
+            "📦 <b>新货到店</b>\n"
+            "╰───────────────╯\n"
+            "✨ 刚刚补充了一批新账号。\n"
+            "🟢 库存已更新，先到先得。\n\n"
+            "打开「商品」看看现在有什么。"
         ),
         "en": (
-            "📦 <b>New stock</b>\n"
-            "━━━━━━━━━━━━\n"
-            "Fresh accounts have arrived in the shop.\n"
+            "╭───────────────╮\n"
+            "📦 <b>Restocked</b>\n"
+            "╰───────────────╯\n"
+            "✨ A fresh batch of accounts is in.\n"
+            "🟢 Stock is updated — first come, first served.\n\n"
             "Open «Products» to see what is available."
         ),
         "ru": (
+            "╭───────────────╮\n"
             "📦 <b>Новое поступление</b>\n"
-            "━━━━━━━━━━━━\n"
-            "В магазине появились новые аккаунты.\n"
-            "Откройте «Товары», чтобы посмотреть наличие."
+            "╰───────────────╯\n"
+            "✨ Загрузили свежую партию аккаунтов.\n"
+            "🟢 Наличие обновлено — кто успел, тот забрал.\n\n"
+            "Откройте «Товары», чтобы посмотреть."
         ),
     },
     "catalog": {
@@ -583,6 +646,224 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Stock is empty.",
         "ru": "Склад пуст.",
     },
+    # Added with all five languages inline rather than through _VI/_HI: a new
+    # string is easier to keep honest when every translation of it sits on one
+    # screen.
+    "top_up_too_small": {
+        "zh": "最低充值金额为 {minimum}。请输入不低于该金额的数字。",
+        "en": "The minimum top-up is {minimum}. Enter that amount or more.",
+        "ru": "Минимальная сумма пополнения — {minimum}. Введите её или больше.",
+        "vi": "Số tiền nạp tối thiểu là {minimum}. Hãy nhập số đó hoặc lớn hơn.",
+        "hi": "न्यूनतम राशि {minimum} है। इतनी या इससे अधिक राशि दर्ज करें।",
+    },
+    "top_up_min_hint": {
+        "zh": "最低 {minimum}。",
+        "en": "Minimum {minimum}.",
+        "ru": "Минимум {minimum}.",
+        "vi": "Tối thiểu {minimum}.",
+        "hi": "न्यूनतम {minimum}।",
+    },
+    "top_up_cancelled": {
+        "zh": "已取消充值。",
+        "en": "Top-up cancelled.",
+        "ru": "Пополнение отменено.",
+        "vi": "Đã huỷ nạp tiền.",
+        "hi": "राशि जोड़ना रद्द कर दिया गया।",
+    },
+    "cancel_hint": {
+        "zh": "输入 /cancel 或点击下方按钮可以退出。",
+        "en": "Send /cancel or tap the button below to back out.",
+        "ru": "Отправьте /cancel или нажмите кнопку ниже, чтобы выйти.",
+        "vi": "Gửi /cancel hoặc nhấn nút bên dưới để thoát.",
+        "hi": "बाहर निकलने के लिए /cancel भेजें या नीचे का बटन दबाएँ।",
+    },
+    "nothing_to_cancel": {
+        "zh": "现在没有需要取消的操作。",
+        "en": "There is nothing to cancel right now.",
+        "ru": "Сейчас нечего отменять.",
+        "vi": "Hiện không có gì để huỷ.",
+        "hi": "अभी रद्द करने के लिए कुछ नहीं है।",
+    },
+    "action_cancelled": {
+        "zh": "已取消。",
+        "en": "Cancelled.",
+        "ru": "Отменено.",
+        "vi": "Đã huỷ.",
+        "hi": "रद्द कर दिया गया।",
+    },
+    # The referral screen. The percentage is passed in rather than written into
+    # the text, so the number a buyer is promised and the number the code pays
+    # can never drift apart.
+    "referral_card": {
+        "zh": (
+            "╭───────────────╮\n"
+            "👥 <b>邀请返利</b>\n"
+            "╰───────────────╯\n"
+            "分享你的链接，好友每次购买你都能拿 <b>{percent}%</b>，"
+            "直接进入余额，可用于下单或提现给客服。\n\n"
+            "🔗 你的链接：\n{link}\n\n"
+            "👤 已邀请 · <b>{invited}</b>\n"
+            "🧾 已带来订单 · <b>{orders}</b>\n"
+            "💰 累计收益 · <b>{earned}</b>\n\n"
+            "🎁 活动截止 2026年9月5日：好友累计购买满 $5，"
+            "你将额外获得 $1 余额。\n\n"
+            "<i>返利在好友付款后立即入账。</i>"
+        ),
+        "en": (
+            "╭───────────────╮\n"
+            "👥 <b>Referral programme</b>\n"
+            "╰───────────────╯\n"
+            "Share your link and you earn <b>{percent}%</b> of everything the "
+            "people you invite buy — straight onto your balance, ready to spend "
+            "on an order.\n\n"
+            "🔗 Your link:\n{link}\n\n"
+            "👤 Invited · <b>{invited}</b>\n"
+            "🧾 Their paid orders · <b>{orders}</b>\n"
+            "💰 Earned so far · <b>{earned}</b>\n\n"
+            "🎁 Until September 5, 2026: when an invited friend spends $5 in total, "
+            "you receive an extra $1 balance bonus.\n\n"
+            "<i>The commission lands the moment their payment goes through.</i>"
+        ),
+        "ru": (
+            "╭───────────────╮\n"
+            "👥 <b>Реферальная программа</b>\n"
+            "╰───────────────╯\n"
+            "Делитесь ссылкой — и получаете <b>{percent}%</b> с каждой покупки "
+            "тех, кто пришёл по ней. Деньги сразу падают на баланс, ими можно "
+            "оплатить заказ.\n\n"
+            "🔗 Ваша ссылка:\n{link}\n\n"
+            "👤 Приглашено · <b>{invited}</b>\n"
+            "🧾 Их оплаченных заказов · <b>{orders}</b>\n"
+            "💰 Заработано · <b>{earned}</b>\n\n"
+            "🎁 Акция до 5 сентября 2026: когда приглашённый вами пользователь "
+            "купит товаров на $5 суммарно, вы получите ещё $1 на баланс.\n\n"
+            "<i>Начисление приходит сразу после их оплаты.</i>"
+        ),
+        "vi": (
+            "╭───────────────╮\n"
+            "👥 <b>Chương trình giới thiệu</b>\n"
+            "╰───────────────╯\n"
+            "Chia sẻ liên kết của bạn và nhận <b>{percent}%</b> mọi đơn hàng của "
+            "người bạn mời — cộng thẳng vào số dư, dùng được để đặt hàng.\n\n"
+            "🔗 Liên kết của bạn:\n{link}\n\n"
+            "👤 Đã mời · <b>{invited}</b>\n"
+            "🧾 Đơn đã thanh toán của họ · <b>{orders}</b>\n"
+            "💰 Đã nhận · <b>{earned}</b>\n\n"
+            "🎁 Khuyến mãi đến ngày 05/09/2026: khi người bạn mời mua tổng cộng $5, "
+            "bạn nhận thêm $1 vào số dư.\n\n"
+            "<i>Hoa hồng vào ngay khi họ thanh toán xong.</i>"
+        ),
+        "hi": (
+            "╭───────────────╮\n"
+            "👥 <b>रेफ़रल प्रोग्राम</b>\n"
+            "╰───────────────╯\n"
+            "अपना लिंक साझा करें और आपके बुलाए लोगों की हर खरीद पर <b>{percent}%</b> "
+            "पाएँ — सीधे आपकी शेष राशि में, ऑर्डर पर खर्च करने के लिए तैयार।\n\n"
+            "🔗 आपका लिंक:\n{link}\n\n"
+            "👤 आमंत्रित · <b>{invited}</b>\n"
+            "🧾 उनके भुगतान किए ऑर्डर · <b>{orders}</b>\n"
+            "💰 अब तक कमाया · <b>{earned}</b>\n\n"
+            "🎁 5 सितंबर 2026 तक ऑफ़र: आपके आमंत्रित व्यक्ति की कुल खरीद $5 होने पर "
+            "आपको बैलेंस में अतिरिक्त $1 मिलेगा।\n\n"
+            "<i>उनका भुगतान होते ही कमीशन जुड़ जाता है।</i>"
+        ),
+    },
+    "referral_bonus": {
+        "zh": (
+            "💰 <b>邀请返利入账</b>\n"
+            "你邀请的用户完成了一笔订单。\n"
+            "返利 · <b>{bonus}</b>（{percent}%）\n"
+            "当前余额 · <b>{balance}</b>"
+        ),
+        "en": (
+            "💰 <b>Referral commission</b>\n"
+            "Someone you invited completed an order.\n"
+            "Your cut · <b>{bonus}</b> ({percent}%)\n"
+            "Balance now · <b>{balance}</b>"
+        ),
+        "ru": (
+            "💰 <b>Реферальное начисление</b>\n"
+            "Приглашённый вами человек оплатил заказ.\n"
+            "Ваши · <b>{bonus}</b> ({percent}%)\n"
+            "Баланс теперь · <b>{balance}</b>"
+        ),
+        "vi": (
+            "💰 <b>Hoa hồng giới thiệu</b>\n"
+            "Người bạn mời vừa hoàn tất một đơn hàng.\n"
+            "Phần của bạn · <b>{bonus}</b> ({percent}%)\n"
+            "Số dư hiện tại · <b>{balance}</b>"
+        ),
+        "hi": (
+            "💰 <b>रेफ़रल कमीशन</b>\n"
+            "आपके बुलाए किसी व्यक्ति ने ऑर्डर पूरा किया।\n"
+            "आपका हिस्सा · <b>{bonus}</b> ({percent}%)\n"
+            "अब शेष राशि · <b>{balance}</b>"
+        ),
+    },
+    "referral_campaign_bonus": {
+        "zh": (
+            "🎁 <b>邀请活动奖励</b>\n"
+            "你邀请的用户累计购买已达到 $5。\n"
+            "额外奖励 · <b>{bonus}</b>（$1.00）\n"
+            "当前余额 · <b>{balance}</b>"
+        ),
+        "en": (
+            "🎁 <b>Referral campaign reward</b>\n"
+            "Someone you invited has spent $5 in total.\n"
+            "Extra reward · <b>{bonus}</b> ({bonus_usd})\n"
+            "Balance now · <b>{balance}</b>"
+        ),
+        "ru": (
+            "🎁 <b>Бонус по акции</b>\n"
+            "Приглашённый вами пользователь купил товаров на $5 суммарно.\n"
+            "Дополнительный бонус · <b>{bonus}</b> ({bonus_usd})\n"
+            "Баланс теперь · <b>{balance}</b>"
+        ),
+        "vi": (
+            "🎁 <b>Thưởng khuyến mãi giới thiệu</b>\n"
+            "Người bạn mời đã mua tổng cộng $5.\n"
+            "Thưởng thêm · <b>{bonus}</b> ({bonus_usd})\n"
+            "Số dư hiện tại · <b>{balance}</b>"
+        ),
+        "hi": (
+            "🎁 <b>रेफ़रल ऑफ़र बोनस</b>\n"
+            "आपके आमंत्रित व्यक्ति ने कुल $5 की खरीदारी की है।\n"
+            "अतिरिक्त बोनस · <b>{bonus}</b> ({bonus_usd})\n"
+            "अब शेष राशि · <b>{balance}</b>"
+        ),
+    },
+    "settings_card": {
+        "zh": (
+            "⚙️ <b>设置</b>\n\n"
+            "🔔 他人购买通知 · <b>{notifications}</b>\n"
+            "🌐 界面语言 · <b>{language}</b>\n\n"
+            "<i>点击下方按钮即可修改。</i>"
+        ),
+        "en": (
+            "⚙️ <b>Settings</b>\n\n"
+            "🔔 Notifications about other purchases · <b>{notifications}</b>\n"
+            "🌐 Interface language · <b>{language}</b>\n\n"
+            "<i>Tap a button below to change it.</i>"
+        ),
+        "ru": (
+            "⚙️ <b>Настройки</b>\n\n"
+            "🔔 Уведомления о чужих покупках · <b>{notifications}</b>\n"
+            "🌐 Язык интерфейса · <b>{language}</b>\n\n"
+            "<i>Нажмите кнопку ниже, чтобы изменить.</i>"
+        ),
+        "vi": (
+            "⚙️ <b>Cài đặt</b>\n\n"
+            "🔔 Thông báo về đơn của người khác · <b>{notifications}</b>\n"
+            "🌐 Ngôn ngữ giao diện · <b>{language}</b>\n\n"
+            "<i>Nhấn nút bên dưới để thay đổi.</i>"
+        ),
+        "hi": (
+            "⚙️ <b>सेटिंग्स</b>\n\n"
+            "🔔 दूसरों की खरीद की सूचनाएँ · <b>{notifications}</b>\n"
+            "🌐 इंटरफ़ेस भाषा · <b>{language}</b>\n\n"
+            "<i>बदलने के लिए नीचे का बटन दबाएँ।</i>"
+        ),
+    },
 }
 
 
@@ -608,11 +889,7 @@ _VI: dict[str, str] = {
         "Nhấn nút bên dưới để thanh toán.\n"
         "Số dư sẽ được cập nhật tự động sau khi thanh toán."
     ),
-    "mpay_method": (
-        "Chọn cách thanh toán {amount}:\n\n"
-        "• Crypto Pay — cộng tiền tự động, nhanh nhất.\n"
-        "• Cryptocurrency — chuyển trực tiếp vào ví của chúng tôi; quản trị viên kiểm tra rồi cộng tiền cho bạn."
-    ),
+    "mpay_method": "Chọn cách thanh toán {amount}:",
     "mpay_choose_asset": "Chọn đồng tiền (số tiền: {amount}):",
     "mpay_choose_network": (
         "{asset} hoạt động trên nhiều mạng. Hãy chọn đúng mạng mà ví của bạn dùng:\n\n"
@@ -684,7 +961,7 @@ _VI: dict[str, str] = {
     "pay_balance": "💰 Trả bằng số dư",
     "balance_insufficient": "Số dư không đủ. Vui lòng nạp tiền trước.",
     "check_payment": "🔄 Kiểm tra thanh toán",
-    "payment_pending": "Thanh toán chưa được xác nhận. Hãy hoàn tất thanh toán rồi kiểm tra lại.",
+    "payment_pending": "Thanh toán chưa được xác nhận.",
     "payment_expired": "Hoá đơn đã hết hạn. Vui lòng tạo đơn hàng mới.",
     "payment_confirmed": "Đã xác nhận thanh toán. Sản phẩm của bạn sẽ được giao trong vài giây.",
     "top_up_confirmed": "Đã xác nhận nạp tiền. Số dư của bạn sẽ được cập nhật trong vài giây.",
@@ -735,25 +1012,38 @@ _VI: dict[str, str] = {
         "Hỗ trợ: {support}\n"
         "Dùng các nút bên dưới để xem Điều khoản bán hàng và Chính sách bảo mật."
     ),
+    "support_ticket_button": "✉️ Liên hệ hỗ trợ",
+    "support_ticket_prompt": "Mô tả vấn đề trong một tin nhắn. Gửi /cancel để huỷ.",
+    "support_ticket_created": "✅ Đã tạo yêu cầu #{ticket_id}. Chúng tôi sẽ phản hồi sớm nhất có thể.",
+    "support_ticket_message_sent": "✅ Đã thêm tin nhắn vào yêu cầu #{ticket_id}.",
+    "support_ticket_reply_button": "💬 Trả lời yêu cầu",
+    "support_ticket_reply": "✉️ Phản hồi hỗ trợ cho yêu cầu #{ticket_id}:\n\n{body}",
+    "support_ticket_closed": "✅ Yêu cầu #{ticket_id} đã đóng. Nếu cần hỗ trợ thêm, hãy tạo yêu cầu mới.",
+    "support_ticket_already_closed": "Yêu cầu này đã được đóng.",
+    "support_ticket_too_long": "Tin nhắn quá dài. Tối đa 4000 ký tự.",
     "settings": "⚙️ Cài đặt\n\nThông báo mua hàng: {status}",
-    "notifications_on": " đang bật",
-    "notifications_off": " đang tắt",
+    "notifications_on": "đang bật",
+    "notifications_off": "đang tắt",
     "enable_notifications": "🔔 Bật thông báo mua hàng",
     "disable_notifications": "🔕 Tắt thông báo mua hàng",
     "notifications_updated": "Đã cập nhật cài đặt thông báo mua hàng.",
     "purchase_notification": (
-        "🛍 <b>Đơn hàng mới</b>\n"
-        "━━━━━━━━━━━━\n"
-        "📦 {product}\n"
-        "🔢 {quantity} cái\n"
-        "💵 {price}\n"
-        "👤 {buyer}"
+        "┌─────────────────┐\n"
+        "🛍 <b>Vừa có người mua</b>\n"
+        "└─────────────────┘\n"
+        "📦 Sản phẩm · <b>{product}</b>\n"
+        "🔢 Số lượng · <b>{quantity}</b>\n"
+        "💵 Tổng · <b>{price}</b>\n"
+        "👤 Người mua · <i>{buyer}</i>\n"
+        "└╴ Tồn kho đã cập nhật"
     ),
     "disable_purchase_notifications": "🔕 Tắt thông báo mua hàng",
     "stock_replenished": (
+        "╭───────────────╮\n"
         "📦 <b>Hàng mới về</b>\n"
-        "━━━━━━━━━━━━\n"
-        "Cửa hàng vừa có thêm tài khoản mới.\n"
+        "╰───────────────╯\n"
+        "✨ Vừa nhập một lô tài khoản mới.\n"
+        "🟢 Tồn kho đã cập nhật — ai nhanh người đó được.\n\n"
         "Mở «Sản phẩm» để xem hàng còn."
     ),
     "catalog": "🛍 Sản phẩm",
@@ -787,11 +1077,7 @@ _HI: dict[str, str] = {
         "भुगतान के लिए नीचे का बटन दबाएँ।\n"
         "भुगतान के बाद आपकी शेष राशि अपने आप अपडेट हो जाएगी।"
     ),
-    "mpay_method": (
-        "{amount} का भुगतान कैसे करना है, चुनें:\n\n"
-        "• Crypto Pay — राशि अपने आप जुड़ती है, सबसे तेज़।\n"
-        "• Cryptocurrency — सीधे हमारे वॉलेट में भेजें; एडमिन जाँचकर आपकी राशि जोड़ देगा।"
-    ),
+    "mpay_method": "{amount} का भुगतान कैसे करना है, चुनें:",
     "mpay_choose_asset": "सिक्का चुनें (राशि: {amount}):",
     "mpay_choose_network": (
         "{asset} कई नेटवर्क पर चलता है। वही चुनें जो आपका वॉलेट वाकई इस्तेमाल करता है:\n\n"
@@ -863,7 +1149,7 @@ _HI: dict[str, str] = {
     "pay_balance": "💰 शेष राशि से भुगतान करें",
     "balance_insufficient": "शेष राशि पर्याप्त नहीं है। कृपया पहले राशि जोड़ें।",
     "check_payment": "🔄 भुगतान जाँचें",
-    "payment_pending": "भुगतान की पुष्टि अभी नहीं हुई। भुगतान पूरा करें और फिर जाँचें।",
+    "payment_pending": "भुगतान की अभी पुष्टि नहीं हुई है।",
     "payment_expired": "इनवॉइस की अवधि समाप्त हो गई। कृपया नया ऑर्डर बनाएँ।",
     "payment_confirmed": "भुगतान की पुष्टि हो गई। आपका सामान कुछ सेकंड में दे दिया जाएगा।",
     "top_up_confirmed": "राशि जोड़ने की पुष्टि हो गई। आपकी शेष राशि कुछ सेकंड में अपडेट हो जाएगी।",
@@ -914,25 +1200,38 @@ _HI: dict[str, str] = {
         "सहायता: {support}\n"
         "बिक्री की शर्तें और गोपनीयता नीति देखने के लिए नीचे के बटनों का उपयोग करें।"
     ),
+    "support_ticket_button": "✉️ सहायता से संपर्क करें",
+    "support_ticket_prompt": "अपनी समस्या एक संदेश में लिखें। रद्द करने के लिए /cancel भेजें।",
+    "support_ticket_created": "✅ अनुरोध #{ticket_id} बना दिया गया है। हम जल्द से जल्द जवाब देंगे।",
+    "support_ticket_message_sent": "✅ आपका संदेश अनुरोध #{ticket_id} में जोड़ दिया गया है।",
+    "support_ticket_reply_button": "💬 अनुरोध का जवाब दें",
+    "support_ticket_reply": "✉️ अनुरोध #{ticket_id} पर सहायता का जवाब:\n\n{body}",
+    "support_ticket_closed": "✅ अनुरोध #{ticket_id} बंद कर दिया गया है। आगे मदद चाहिए तो नया अनुरोध बनाएँ।",
+    "support_ticket_already_closed": "यह अनुरोध पहले ही बंद है।",
+    "support_ticket_too_long": "संदेश बहुत लंबा है। अधिकतम 4000 अक्षर।",
     "settings": "⚙️ सेटिंग्स\n\nखरीद सूचनाएँ: {status}",
-    "notifications_on": " चालू",
-    "notifications_off": " बंद",
+    "notifications_on": "चालू",
+    "notifications_off": "बंद",
     "enable_notifications": "🔔 खरीद सूचनाएँ चालू करें",
     "disable_notifications": "🔕 खरीद सूचनाएँ बंद करें",
     "notifications_updated": "खरीद सूचनाओं की सेटिंग अपडेट हो गई।",
     "purchase_notification": (
-        "🛍 <b>नई खरीद</b>\n"
-        "━━━━━━━━━━━━\n"
-        "📦 {product}\n"
-        "🔢 {quantity} नग\n"
-        "💵 {price}\n"
-        "👤 {buyer}"
+        "┌─────────────────┐\n"
+        "🛍 <b>किसी ने अभी खरीदा</b>\n"
+        "└─────────────────┘\n"
+        "📦 उत्पाद · <b>{product}</b>\n"
+        "🔢 मात्रा · <b>{quantity}</b>\n"
+        "💵 कुल · <b>{price}</b>\n"
+        "👤 खरीदार · <i>{buyer}</i>\n"
+        "└╴ स्टॉक अपडेट हो गया"
     ),
     "disable_purchase_notifications": "🔕 खरीद सूचनाएँ बंद करें",
     "stock_replenished": (
-        "📦 <b>नया स्टॉक</b>\n"
-        "━━━━━━━━━━━━\n"
-        "दुकान में नए खाते आ गए हैं।\n"
+        "╭───────────────╮\n"
+        "📦 <b>नया स्टॉक आया</b>\n"
+        "╰───────────────╯\n"
+        "✨ खातों की नई खेप आ गई है।\n"
+        "🟢 स्टॉक अपडेट है — पहले आइए, पहले पाइए।\n\n"
         "उपलब्धता देखने के लिए «उत्पाद» खोलें।"
     ),
     "catalog": "🛍 उत्पाद",
@@ -1034,11 +1333,18 @@ def t(language: str | None, key: str, **kwargs: object) -> str:
 
 
 def language_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=label, callback_data=f"lang:{code}") for code, label in LANGUAGE_BUTTONS]
-        ]
-    )
+    """Two languages per row, so the full name fits next to the flag.
+
+    Five buttons on one row leaves Telegram about a fifth of the width each,
+    which truncates "Tiếng Việt" and "Русский" to something the buyer has to
+    guess at. Two per row is wide enough for every name we ship.
+    """
+    buttons = [
+        InlineKeyboardButton(text=label, callback_data=f"lang:{code}")
+        for code, label in LANGUAGE_BUTTONS
+    ]
+    rows = [buttons[index : index + 2] for index in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def main_keyboard(language: str) -> ReplyKeyboardMarkup:
@@ -1104,6 +1410,16 @@ def balance_keyboard(language: str) -> InlineKeyboardMarkup:
     )
 
 
+# The floor for a top-up, in USD cents. Below this the Crypto Pay invoice costs
+# more in network fees than it carries, so the buyer is told the minimum up
+# front rather than being bounced after typing a figure.
+MIN_TOPUP_CENTS = 130
+
+# Preset top-up buttons, in USD cents. The first one is the minimum, so the
+# cheapest allowed top-up is reachable in a single tap.
+TOPUP_PRESETS_CENTS = (MIN_TOPUP_CENTS, 200, 500, 1000)
+
+
 def top_up_keyboard(language: str, amount_labels: dict[int, str] | None = None) -> InlineKeyboardMarkup:
     labels = {
         "zh": "充值 {amount}",
@@ -1113,39 +1429,73 @@ def top_up_keyboard(language: str, amount_labels: dict[int, str] | None = None) 
         "hi": "{amount} जोड़ें",
     }
     other_labels = {
-        "zh": "其他",
-        "en": "Other",
-        "ru": "Другая сумма",
-        "vi": "Số khác",
-        "hi": "अन्य राशि",
+        "zh": "✏️ 其他",
+        "en": "✏️ Other",
+        "ru": "✏️ Другая сумма",
+        "vi": "✏️ Số khác",
+        "hi": "✏️ अन्य राशि",
+    }
+    cancel_labels = {
+        "zh": "✖️ 取消",
+        "en": "✖️ Cancel",
+        "ru": "✖️ Отмена",
+        "vi": "✖️ Huỷ",
+        "hi": "✖️ रद्द करें",
     }
     language = language if language in LANGUAGES else "en"
     template = _pick(labels, language)
+
     # The caller supplies the labels already converted into the buyer's own
-    # currency; the USD fallback only shows up if it forgot to.
+    # currency, keyed by USD cents; the USD fallback only shows up if it forgot.
+    def preset(cents: int) -> InlineKeyboardButton:
+        return InlineKeyboardButton(
+            text=template.format(
+                amount=(amount_labels or {}).get(cents, f"${cents / 100:.2f}")
+            ),
+            callback_data=f"topup:{cents}",
+        )
+
+    presets = [preset(cents) for cents in TOPUP_PRESETS_CENTS]
+    rows = [presets[index : index + 2] for index in range(0, len(presets), 2)]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_pick(other_labels, language),
+                callback_data="topup:other",
+            ),
+            InlineKeyboardButton(
+                text=_pick(cancel_labels, language),
+                callback_data="topup:cancel",
+                style=ButtonStyle.DANGER,
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def cancel_keyboard(language: str, callback_data: str = "topup:cancel") -> InlineKeyboardMarkup:
+    """A single way out of a prompt that is waiting for typed input.
+
+    Without it the buyer who opened "other amount" by mistake has no way back:
+    every message they send is read as an amount, so the bot keeps asking.
+    """
+    labels = {
+        "zh": "✖️ 取消",
+        "en": "✖️ Cancel",
+        "ru": "✖️ Отмена",
+        "vi": "✖️ Huỷ",
+        "hi": "✖️ रद्द करें",
+    }
+    language = language if language in LANGUAGES else "en"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=template.format(
-                        amount=(amount_labels or {}).get(amount, f"${amount:.2f}")
-                    ),
-                    callback_data=f"topup:{amount * 100}",
+                    text=_pick(labels, language),
+                    callback_data=callback_data,
+                    style=ButtonStyle.DANGER,
                 )
-                for amount in (2, 5)
-            ],
-            [
-                InlineKeyboardButton(
-                    text=template.format(
-                        amount=(amount_labels or {}).get(10, "$10.00")
-                    ),
-                    callback_data="topup:1000",
-                ),
-                InlineKeyboardButton(
-                    text=_pick(other_labels, language),
-                    callback_data="topup:other",
-                )
-            ],
+            ]
         ]
     )
 
@@ -1488,21 +1838,16 @@ def payment_method_keyboard(language: str, amount_cents: int) -> InlineKeyboardM
     the manual route costs the buyer a wait for an admin.
     """
     language = language if language in LANGUAGES else "en"
-    auto = {
-        "zh": "⚡ Crypto Pay（自动）",
-        "en": "⚡ Crypto Pay (automatic)",
-        "ru": "⚡ Crypto Pay (автоматически)",
-        "vi": "⚡ Crypto Pay (tự động)",
-        "hi": "⚡ Crypto Pay (स्वचालित)",
-    }
     # Left untranslated on purpose: the owner wants the same wording in every
-    # language, the way the coin tickers are the same everywhere.
+    # language, the way the coin tickers are the same everywhere. Neither label
+    # explains itself here — the two names go out bare.
+    auto = "⚡ Crypto Pay"
     manual = "🪙 Cryptocurrency"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_pick(auto, language),
+                    text=auto,
                     callback_data=f"cpay:{amount_cents}",
                     style=ButtonStyle.SUCCESS,
                 )
