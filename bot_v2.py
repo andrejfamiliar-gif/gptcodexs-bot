@@ -25,6 +25,7 @@ import logging
 import secrets
 from datetime import datetime, timezone
 from decimal import Decimal
+from urllib.parse import quote
 
 import bot as legacy
 from aiogram import Bot, Dispatcher, F, Router
@@ -36,6 +37,8 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllPrivateChats,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -63,9 +66,11 @@ _UI: dict[str, dict[str, str]] = {
     },
     "products": {"ru": "🛒 Товары", "en": "🛒 Products", "zh": "🛒 商品", "vi": "🛒 Sản phẩm", "hi": "🛒 उत्पाद"},
     "wallet": {"ru": "💳 Кошелёк", "en": "💳 Wallet", "zh": "💳 钱包", "vi": "💳 Ví", "hi": "💳 वॉलेट"},
+    "queue": {"ru": "🕒 Очередь", "en": "🕒 Queue", "zh": "🕒 排队", "vi": "🕒 Xếp hàng", "hi": "🕒 प्रतीक्षा सूची"},
     "profile": {"ru": "👤 Профиль", "en": "👤 Profile", "zh": "👤 个人资料", "vi": "👤 Hồ sơ", "hi": "👤 प्रोफ़ाइल"},
     "referrals": {"ru": "👥 Рефералы", "en": "👥 Referrals", "zh": "👥 邀请", "vi": "👥 Giới thiệu", "hi": "👥 रेफ़रल"},
     "support": {"ru": "🆘 Поддержка", "en": "🆘 Support", "zh": "🆘 客服", "vi": "🆘 Hỗ trợ", "hi": "🆘 सहायता"},
+    "support_ticket": {"ru": "✉️ Написать в поддержку", "en": "✉️ Contact support", "zh": "✉️ 联系客服", "vi": "✉️ Liên hệ hỗ trợ", "hi": "✉️ सहायता से संपर्क करें"},
     "language": {"ru": "🌐 Язык", "en": "🌐 Language", "zh": "🌐 语言", "vi": "🌐 Ngôn ngữ", "hi": "🌐 भाषा"},
     "terms": {"ru": "📜 Условия", "en": "📜 Terms of Use", "zh": "📜 使用条款", "vi": "📜 Điều khoản", "hi": "📜 नियम"},
     "home": {"ru": "🏠 Главное меню", "en": "🏠 Main menu", "zh": "🏠 主菜单", "vi": "🏠 Menu chính", "hi": "🏠 मुख्य मेनू"},
@@ -202,7 +207,7 @@ _UI: dict[str, dict[str, str]] = {
             "Курс: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
             "Адрес:\n<code>{address}</code>\n\n"
             "⚠️ Используйте только сеть <b>{network}</b>. "
-            "После проверки администратором заказ будет оплачен и товар выдастся автоматически."
+            "После перевода нажмите «Проверить оплату»."
         ),
         "en": (
             "🪙 <b>Cryptocurrency payment</b>\n\n"
@@ -215,7 +220,7 @@ _UI: dict[str, dict[str, str]] = {
             "Rate: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
             "Address:\n<code>{address}</code>\n\n"
             "⚠️ Use only the <b>{network}</b> network. "
-            "Once an admin verifies the transfer, the order is paid and delivered automatically."
+            "After sending the transfer, tap “Check payment”."
         ),
         "zh": (
             "🪙 <b>加密货币支付</b>\n\n"
@@ -228,7 +233,7 @@ _UI: dict[str, dict[str, str]] = {
             "汇率：1 {asset} = ${rate}（{rate_at} UTC）\n\n"
             "地址：\n<code>{address}</code>\n\n"
             "⚠️ 仅使用 <b>{network}</b> 网络。"
-            "管理员核验后订单会自动付款并发货。"
+            "转账后请点击“检查付款”。"
         ),
         "vi": (
             "🪙 <b>Thanh toán bằng tiền điện tử</b>\n\n"
@@ -241,7 +246,7 @@ _UI: dict[str, dict[str, str]] = {
             "Tỷ giá: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
             "Địa chỉ:\n<code>{address}</code>\n\n"
             "⚠️ Chỉ sử dụng mạng <b>{network}</b>. "
-            "Sau khi admin xác nhận, đơn hàng sẽ được thanh toán và giao hàng tự động."
+            "Sau khi chuyển khoản, hãy nhấn “Kiểm tra thanh toán”."
         ),
         "hi": (
             "🪙 <b>क्रिप्टोकरेंसी भुगतान</b>\n\n"
@@ -254,7 +259,7 @@ _UI: dict[str, dict[str, str]] = {
             "दर: 1 {asset} = ${rate} ({rate_at} UTC)\n\n"
             "पता:\n<code>{address}</code>\n\n"
             "⚠️ केवल <b>{network}</b> नेटवर्क का उपयोग करें। "
-            "एडमिन द्वारा सत्यापन के बाद ऑर्डर स्वचालित रूप से पूरा हो जाएगा।"
+            "ट्रांसफ़र के बाद “भुगतान जाँचें” दबाएँ।"
         ),
     },
     "invoice_created": {
@@ -266,7 +271,7 @@ _UI: dict[str, dict[str, str]] = {
     },
     "open_invoice": {"ru": "💳 Открыть Crypto Bot", "en": "💳 Open Crypto Bot", "zh": "💳 打开 Crypto Bot", "vi": "💳 Mở Crypto Bot", "hi": "💳 Crypto Bot खोलें"},
     "check_payment": {"ru": "🔄 Проверить оплату", "en": "🔄 Check payment", "zh": "🔄 检查付款", "vi": "🔄 Kiểm tra thanh toán", "hi": "🔄 भुगतान जाँचें"},
-    "payment_pending": {"ru": "Платёж пока не получен.", "en": "Payment has not arrived yet.", "zh": "尚未收到付款。", "vi": "Thanh toán chưa đến.", "hi": "भुगतान अभी तक नहीं आया।"},
+    "payment_pending": {"ru": "Оплата ещё не подтверждена.", "en": "The payment is not confirmed yet.", "zh": "付款尚未确认。", "vi": "Thanh toán chưa được xác nhận.", "hi": "भुगतान की अभी पुष्टि नहीं हुई है।"},
     "payment_done": {"ru": "✅ Оплата подтверждена.", "en": "✅ Payment confirmed.", "zh": "✅ 付款已确认。", "vi": "✅ Thanh toán đã xác nhận.", "hi": "✅ भुगतान की पुष्टि हो गई।"},
     "payment_expired": {"ru": "Счёт истёк.", "en": "The invoice has expired.", "zh": "账单已过期。", "vi": "Hóa đơn đã hết hạn.", "hi": "इनवॉइस समाप्त हो गया।"},
     "order_not_found": {"ru": "Заказ не найден.", "en": "Order not found.", "zh": "未找到订单。", "vi": "Không tìm thấy đơn hàng.", "hi": "ऑर्डर नहीं मिला।"},
@@ -300,6 +305,41 @@ _UI: dict[str, dict[str, str]] = {
     },
     "state_on": {"ru": "включены", "en": "on", "zh": "已开启", "vi": "bật", "hi": "चालू"},
     "state_off": {"ru": "выключены", "en": "off", "zh": "已关闭", "vi": "tắt", "hi": "बंद"},
+    "settings": {
+        "ru": "⚙️ Настройки",
+        "en": "⚙️ Settings",
+        "zh": "⚙️ 设置",
+        "vi": "⚙️ Cài đặt",
+        "hi": "⚙️ सेटिंग्स",
+    },
+    "label_invited": {
+        "ru": "Приглашено",
+        "en": "Invited",
+        "zh": "已邀请",
+        "vi": "Đã mời",
+        "hi": "आमंत्रित",
+    },
+    "label_referral_earned": {
+        "ru": "Заработано с рефералов",
+        "en": "Referral earnings",
+        "zh": "邀请收益",
+        "vi": "Thu nhập giới thiệu",
+        "hi": "रेफ़रल आय",
+    },
+    "share_link": {
+        "ru": "📤 Поделиться ссылкой",
+        "en": "📤 Share the link",
+        "zh": "📤 分享链接",
+        "vi": "📤 Chia sẻ liên kết",
+        "hi": "📤 लिंक साझा करें",
+    },
+    "share_text": {
+        "ru": "Аккаунты по нормальной цене — заходи",
+        "en": "Accounts at a fair price — take a look",
+        "zh": "价格实在的账号，来看看",
+        "vi": "Tài khoản giá hợp lý — xem thử nhé",
+        "hi": "वाजिब दाम पर अकाउंट — देख लो",
+    },
 }
 
 # The same guard i18n.py uses: a missing translation here would silently serve
@@ -346,6 +386,10 @@ def order_local_price(order, language: str) -> str:
 
 def _safe_category(raw: str) -> str:
     raw = (raw or "catalog").strip().lower()
+    if raw in legacy.CATEGORY_TITLES:
+        # The owner defined this section in the admin panel, so it gets its own
+        # shelf instead of being folded into the legacy ChatGPT grouping.
+        return raw
     # Existing built-in products use plus/pro; the new storefront presents them
     # as one ChatGPT category without rewriting historical database rows.
     if raw in {"plus", "pro", "chatgpt", "gpt"}:
@@ -354,6 +398,9 @@ def _safe_category(raw: str) -> str:
 
 
 def _category_title(category: str) -> str:
+    owned = legacy.CATEGORY_TITLES.get(category)
+    if owned:
+        return owned
     known = {
         "chatgpt": "🤖 ChatGPT",
         "google": "🌐 Google",
@@ -394,6 +441,7 @@ def main_menu_keyboard(language: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text=ui(language, "referrals"), callback_data="shop:referrals"),
             ],
             [
+                InlineKeyboardButton(text=ui(language, "queue"), callback_data="shop:queue"),
                 InlineKeyboardButton(
                     text=ui(language, "support"),
                     callback_data="shop:support",
@@ -422,6 +470,37 @@ def categories_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+async def queue_keyboard_v2(language: str) -> InlineKeyboardMarkup:
+    """Show every product that can be reserved, including virtual stock.
+
+    The quantity/payment callbacks are kept compatible with the existing
+    queue flow in ``bot.py``; only the product picker is part of the inline v2
+    storefront so newly-created admin products appear here too.
+    """
+    rt = legacy.get_runtime()
+    stock = await rt.db.available_stock()
+    rows: list[list[InlineKeyboardButton]] = []
+    for key, product in rt.settings.products.items():
+        count = int(stock.get(key, 0))
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{'🟢' if count > 0 else '🔴'} "
+                    f"{legacy.product_label(product, language)} · "
+                    f"{legacy.product_price_button(rt.settings, product, language)}",
+                    callback_data=f"shop:queue_product:{key}",
+                    style=ButtonStyle.SUCCESS if count > 0 else ButtonStyle.DANGER,
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [InlineKeyboardButton(text=ui(language, "back"), callback_data="shop:home")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def category_keyboard(
     language: str,
     category: str,
@@ -435,8 +514,8 @@ def category_keyboard(
             [
                 InlineKeyboardButton(
                     text=(
-                        f"{product.title.get(language, product.title.get('en', key))} · "
-                        f"{legacy.product_price(legacy.get_runtime().settings, product, language)} · 📦 {count}"
+                        f"{legacy.product_label(product, language)} · "
+                        f"{legacy.product_price_button(legacy.get_runtime().settings, product, language)} · 📦 {count}"
                     ),
                     callback_data=f"shop:product:{key}",
                     style=ButtonStyle.SUCCESS if count > 0 else ButtonStyle.DANGER,
@@ -551,7 +630,6 @@ def checkout_keyboard(
     balance_cents: int,
     required_balance_cents: int,
 ) -> InlineKeyboardMarkup:
-    balance_style = ButtonStyle.SUCCESS if balance_cents >= required_balance_cents else ButtonStyle.DANGER
     # The balance on the button has to match the balance in the message above it,
     # so it is rendered in the buyer's currency rather than in dollars.
     balance_label = legacy.localized_price(
@@ -559,29 +637,36 @@ def checkout_keyboard(
         language,
         balance_cents,
     )
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=ui(language, "crypto_bot"),
-                    callback_data=f"shop:pay_cpay:{product_key}:{quantity}",
-                    style=ButtonStyle.PRIMARY,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=ui(language, "cryptocurrency"),
-                    callback_data=f"shop:pay_crypto:{product_key}:{quantity}",
-                    style=ButtonStyle.PRIMARY,
-                )
-            ],
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text=ui(language, "crypto_bot"),
+                callback_data=f"shop:pay_cpay:{product_key}:{quantity}",
+                style=ButtonStyle.PRIMARY,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text=ui(language, "cryptocurrency"),
+                callback_data=f"shop:pay_crypto:{product_key}:{quantity}",
+                style=ButtonStyle.PRIMARY,
+            )
+        ],
+    ]
+    # Do not show a balance option that cannot succeed. This keeps the payment
+    # screen unambiguous and matches the legacy checkout flow.
+    if balance_cents >= required_balance_cents:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text=f"{ui(language, 'balance_pay')} · {balance_label}",
                     callback_data=f"shop:pay_balance:{product_key}:{quantity}",
-                    style=balance_style,
+                    style=ButtonStyle.SUCCESS,
                 )
-            ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text=ui(language, "change_quantity" if quantity > 1 else "buy_many"),
@@ -591,6 +676,7 @@ def checkout_keyboard(
             [InlineKeyboardButton(text=ui(language, "back"), callback_data=f"shop:product:{product_key}")],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def crypto_assets_keyboard(language: str, order_id: int) -> InlineKeyboardMarkup:
@@ -656,7 +742,6 @@ def invoice_keyboard(language: str, invoice_url: str, order_id: int, product_key
 async def home_text(user: User, language: str) -> str:
     rt = legacy.get_runtime()
     balance = await rt.db.get_balance_cents(user.id)
-    total_users = await rt.db.count_users()
     username = f"@{html.escape(user.username)}" if user.username else "—"
     name = html.escape(user.full_name or user.first_name or "—")
     return (
@@ -664,7 +749,6 @@ async def home_text(user: User, language: str) -> str:
         f"🆔 ID: <code>{user.id}</code>\n"
         f"👤 {ui(language, 'label_name')}: {name}\n"
         f"🔗 {ui(language, 'label_username')}: {username}\n"
-        f"👥 {ui(language, 'label_users')}: {total_users}\n"
         f"💰 {ui(language, 'label_balance')}: <b>{legacy.localized_price(rt.settings, language, balance)}</b>"
     )
 
@@ -685,11 +769,12 @@ async def show_home_callback(callback: CallbackQuery, language: str) -> None:
 async def actual_stock_for(product_key: str) -> int:
     """How many units the storefront offers for this product.
 
-    ``available_stock`` is ``max(display_stock, real_stock)``, so the owner can
-    put a product on sale by raising the display counter before the accounts
-    themselves are loaded. A buyer who pays for a unit that has no credential
-    behind it yet does not lose it: the order parks in ``waiting_stock`` and
-    ``deliver_pending_orders`` hands it over as soon as stock is loaded.
+    That is ``display_stock`` — the one counter the owner sets, which loading
+    accounts raises and a sale lowers. So a product can go on sale before the
+    accounts themselves are loaded. A buyer who pays for a unit with no
+    credential behind it yet does not lose it: the order parks in
+    ``waiting_stock`` and ``deliver_pending_orders`` hands it over as soon as
+    accounts arrive.
     """
     return int((await legacy.get_runtime().db.available_stock()).get(product_key, 0))
 
@@ -701,8 +786,8 @@ async def render_product(callback: CallbackQuery, language: str, product_key: st
         await callback.answer(legacy.t(language, "generic_error"), show_alert=True)
         return
     stock = await actual_stock_for(product_key)
-    name = html.escape(product.title.get(language, product.title.get("en", product_key)))
-    price = legacy.product_price(rt.settings, product, language)
+    name = html.escape(legacy.product_label(product, language))
+    price = legacy.product_price_display(rt.settings, product, language)
     text = (
         f"📦 <b>{name}</b>\n\n"
         f"💵 {ui(language, 'price')}: <b>{price}</b>\n"
@@ -724,19 +809,26 @@ async def render_checkout(callback: CallbackQuery, language: str, product_key: s
         await callback.answer(ui(language, "quantity_invalid", available=stock), show_alert=True)
         return
     local_total = legacy.product_amount(rt.settings, product, language) * quantity
-    base_total = product.price_cents * quantity
+    base_total = legacy.discounted_product_usd_cents(product) * quantity
     balance = await rt.db.get_balance_cents(callback.from_user.id)
     local_currency = legacy.currency_for_language(language)
     local_price = legacy.format_fiat_price(local_total, local_currency)
+    if product.discount_percent:
+        original_total = legacy.original_product_amount(rt.settings, product, language) * quantity
+        local_price = (
+            f"<s>{legacy.format_fiat_price(original_total, local_currency)}</s> → "
+            f"<b>{local_price}</b> (-{int(product.discount_percent)}%)"
+        )
     usd_line = "" if local_currency == "USD" else f"\nUSD: <b>{_fmt_usd(base_total)}</b>"
     text = (
         f"{ui(language, 'checkout_title')}\n\n"
-        f"📦 {html.escape(product.title.get(language, product.key))}\n"
+        f"📦 {html.escape(legacy.product_label(product, language))}\n"
         f"🔢 × {quantity}\n"
-        f"💵 <b>{local_price}</b>{usd_line}\n"
+        f"💵 {local_price}{usd_line}\n"
         f"💰 {ui(language, 'label_balance')}: "
         f"<b>{legacy.localized_price(rt.settings, language, balance)}</b>"
     )
+    await rt.db.track_event(callback.from_user.id, "checkout", product_key)
     await edit_or_send(
         callback,
         text,
@@ -842,10 +934,14 @@ async def cancel_non_invoice_order(order_id: int, user_id: int) -> bool:
 
 async def settle_paid_order_v2(bot: Bot, order_id: int) -> dict[str, object] | None:
     rt = legacy.get_runtime()
-    settlement = await rt.db.settle_paid_order(order_id, decrement_stock=True)
+    settlement = await rt.db.settle_paid_order(
+        order_id,
+        decrement_stock=rt.settings.decrement_stock_on_payment,
+    )
     if settlement is not None:
         await legacy.notify_admins_payment(bot, settlement)
         await legacy.broadcast_purchase_notification(bot, settlement)
+        await legacy.credit_referral_for_order(bot, settlement)
     if settlement is not None and settlement["delivery_status"] == "waiting_stock":
         language = await rt.db.get_language(int(settlement["user_id"])) or "en"
         await bot.send_message(int(settlement["user_id"]), legacy.preorder_notice(language))
@@ -897,7 +993,10 @@ async def payment_watcher_v2(bot: Bot) -> None:
                     logger.exception("Could not refresh invoice for order %s", order["id"])
 
             for order in await rt.db.get_waiting_stock_orders():
-                if await rt.db.try_fulfill_waiting_order(int(order["id"]), decrement_stock=True):
+                if await rt.db.try_fulfill_waiting_order(
+                    int(order["id"]),
+                    decrement_stock=rt.settings.decrement_stock_on_payment,
+                ):
                     logger.info("Stock restored; order %s is ready for delivery", order["id"])
             await legacy.deliver_pending_orders(bot)
             expired = await rt.db.expire_stale_manual_payments(rt.settings.manual_crypto_note_hours)
@@ -925,6 +1024,11 @@ async def start_handler(message: Message, bot: Bot) -> None:
         except ValueError:
             referrer_id = None
     language = await legacy.ensure_message_user(message, referrer_id)
+    await legacy.get_runtime().db.track_event(
+        legacy.user_id_from_message(message),
+        "start",
+        f"ref_{referrer_id}" if referrer_id else None,
+    )
     await legacy.notify_admins_on_start(bot, message)
     if language not in legacy.LANGUAGES:
         await message.answer("请选择语言：", reply_markup=legacy.language_keyboard())
@@ -988,8 +1092,50 @@ async def products_callback(callback: CallbackQuery) -> None:
     if language not in legacy.LANGUAGES:
         await callback.answer("Choose a language first", show_alert=True)
         return
+    await legacy.get_runtime().db.track_event(callback.from_user.id, "catalog")
     await callback.answer()
     await edit_or_send(callback, ui(language, "categories_title"), categories_keyboard(language))
+
+
+@router.callback_query(F.data == "shop:queue")
+async def queue_callback(callback: CallbackQuery) -> None:
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    await callback.answer()
+    await edit_or_send(
+        callback,
+        legacy.t(language, "queue"),
+        await queue_keyboard_v2(language),
+    )
+
+
+@router.callback_query(F.data.startswith("shop:queue_product:"))
+async def queue_product_callback_v2(callback: CallbackQuery) -> None:
+    """Open the quantity picker for a queue reservation.
+
+    The following ``queue_qty`` callback is handled by the legacy payment
+    flow, which already creates a pending order and offers Crypto Pay or a
+    sufficient balance. This bridge keeps the queue feature compatible while
+    making the picker dynamic for admin-created products.
+    """
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    product_key = (callback.data or "").split(":", maxsplit=2)[2]
+    product = legacy.get_runtime().settings.products.get(product_key)
+    if product is None:
+        await callback.answer(legacy.t(language, "generic_error"), show_alert=True)
+        return
+    await callback.answer()
+    await edit_or_send(
+        callback,
+        f"{legacy.t(language, 'queue_choose_quantity')}\n\n"
+        f"📦 <b>{html.escape(legacy.product_label(product, language))}</b>",
+        legacy.queue_quantity_keyboard(language, product_key),
+    )
 
 
 @router.callback_query(F.data.startswith("shop:cat:"))
@@ -1003,7 +1149,10 @@ async def category_callback(callback: CallbackQuery) -> None:
     if category not in grouped:
         await callback.answer(ui(language, "category_empty"), show_alert=True)
         return
-    stock = await legacy.get_runtime().db.actual_stock()
+    # The same counter the product page uses. Reading real accounts here would
+    # print 📦 0 next to a product whose own page offers it for sale.
+    stock = await legacy.get_runtime().db.available_stock()
+    await legacy.get_runtime().db.track_event(callback.from_user.id, "catalog", category)
     await callback.answer()
     await edit_or_send(
         callback,
@@ -1019,6 +1168,7 @@ async def product_callback(callback: CallbackQuery) -> None:
         await callback.answer("Choose a language first", show_alert=True)
         return
     product_key = (callback.data or "").split(":", maxsplit=2)[2]
+    await legacy.get_runtime().db.track_event(callback.from_user.id, "product_view", product_key)
     await callback.answer()
     await render_product(callback, language, product_key)
 
@@ -1058,7 +1208,7 @@ async def many_callback(callback: CallbackQuery) -> None:
         ui(
             language,
             "quantity_title",
-            product=html.escape(product.title.get(language, product.key)),
+            product=html.escape(legacy.product_label(product, language)),
             available=available,
         ),
         quantity_selector_keyboard(language, product_key, 2, available),
@@ -1100,7 +1250,7 @@ async def quantity_select_callback(callback: CallbackQuery) -> None:
         ui(
             language,
             "quantity_title",
-            product=html.escape(product.title.get(language, product.key)),
+            product=html.escape(legacy.product_label(product, language)),
             available=available,
         ),
         quantity_selector_keyboard(language, product_key, quantity, available),
@@ -1156,6 +1306,7 @@ async def wallet_callback(callback: CallbackQuery) -> None:
         return
     rt = legacy.get_runtime()
     balance = await rt.db.get_balance_cents(callback.from_user.id)
+    await rt.db.track_event(callback.from_user.id, "topup_open")
     markup = legacy.top_up_keyboard(language, legacy.top_up_price_labels(rt.settings, language))
     # Add an inline way back home to the existing top-up keyboard.
     markup.inline_keyboard.append([InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")])
@@ -1176,6 +1327,7 @@ async def profile_callback(callback: CallbackQuery) -> None:
     rt = legacy.get_runtime()
     balance = await rt.db.get_balance_cents(callback.from_user.id)
     notify = await rt.db.get_purchase_notifications(callback.from_user.id)
+    referral = await rt.db.referral_summary(callback.from_user.id)
     username = f"@{html.escape(callback.from_user.username)}" if callback.from_user.username else "—"
     text = (
         f"👤 <b>{ui(language, 'profile').split(' ', 1)[-1]}</b>\n\n"
@@ -1185,16 +1337,105 @@ async def profile_callback(callback: CallbackQuery) -> None:
         f"{ui(language, 'label_balance')}: "
         f"<b>{legacy.localized_price(rt.settings, language, balance)}</b>\n"
         f"{ui(language, 'label_notifications')}: "
-        f"{ui(language, 'state_on') if notify else ui(language, 'state_off')}"
+        f"{ui(language, 'state_on') if notify else ui(language, 'state_off')}\n"
+        f"{ui(language, 'label_invited')}: <b>{referral['invited']}</b>\n"
+        f"{ui(language, 'label_referral_earned')}: "
+        f"<b>{legacy.localized_price(rt.settings, language, referral['earned_cents'])}</b>"
     )
     await callback.answer()
     await edit_or_send(
         callback,
         text,
         InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=ui(language, "settings"), callback_data="shop:settings"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=ui(language, "referrals"), callback_data="shop:referrals"
+                    )
+                ],
+                [InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")],
+            ]
         ),
     )
+
+
+def settings_keyboard_v2(language: str, notifications: bool) -> InlineKeyboardMarkup:
+    """The few switches worth their own screen, plus the way back to the profile."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=legacy.t(
+                        language,
+                        "disable_notifications" if notifications else "enable_notifications",
+                    ),
+                    callback_data="purchase_notify:off" if notifications else "purchase_notify:on",
+                    # Red when the tap switches something off, green when it
+                    # switches it on: the colour describes the effect, not the
+                    # current state.
+                    style=ButtonStyle.DANGER if notifications else ButtonStyle.SUCCESS,
+                )
+            ],
+            [InlineKeyboardButton(text=ui(language, "language"), callback_data="shop:language")],
+            [
+                InlineKeyboardButton(text=ui(language, "profile"), callback_data="shop:profile"),
+                InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home"),
+            ],
+        ]
+    )
+
+
+@router.callback_query(F.data == "shop:settings")
+async def settings_callback(callback: CallbackQuery) -> None:
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    await callback.answer()
+    await render_settings(callback, language)
+
+
+async def render_settings(callback: CallbackQuery, language: str) -> None:
+    notifications = await legacy.get_runtime().db.get_purchase_notifications(callback.from_user.id)
+    await edit_or_send(
+        callback,
+        legacy.t(
+            language,
+            "settings_card",
+            notifications=legacy.t(
+                language, "notifications_on" if notifications else "notifications_off"
+            ),
+            language=legacy.LANGUAGE_NAMES.get(language, language.upper()),
+        ),
+        settings_keyboard_v2(language, notifications),
+    )
+
+
+@router.callback_query(F.data.startswith("purchase_notify:"))
+async def purchase_notify_callback(callback: CallbackQuery) -> None:
+    """Toggle the switch and stay on the settings screen.
+
+    Registered ahead of the legacy handler so the buyer is not dropped onto the
+    older settings message, which has no way back to the storefront.
+    """
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    action = (callback.data or "").split(":", maxsplit=1)[1]
+    if action not in {"on", "off"}:
+        await callback.answer(legacy.t(language, "generic_error"), show_alert=True)
+        return
+    await legacy.get_runtime().db.set_purchase_notifications(
+        callback.from_user.id, action == "on"
+    )
+    await callback.answer(legacy.t(language, "notifications_updated"))
+    await render_settings(callback, language)
 
 
 @router.callback_query(F.data == "shop:referrals")
@@ -1203,14 +1444,37 @@ async def referrals_callback(callback: CallbackQuery, bot: Bot) -> None:
     if language not in legacy.LANGUAGES:
         await callback.answer("Choose a language first", show_alert=True)
         return
+    rt = legacy.get_runtime()
     me = await bot.get_me()
     link = f"https://t.me/{me.username}?start=ref_{callback.from_user.id}"
+    summary = await rt.db.referral_summary(callback.from_user.id)
     await callback.answer()
     await edit_or_send(
         callback,
-        legacy.t(language, "invite", link=html.escape(link)),
+        legacy.t(
+            language,
+            "referral_card",
+            percent=legacy.REFERRAL_PERCENT,
+            link=html.escape(link),
+            invited=summary["invited"],
+            orders=summary["paid_orders"],
+            earned=legacy.localized_price(rt.settings, language, summary["earned_cents"]),
+        ),
         InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")]]
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=ui(language, "share_link"),
+                        url=(
+                            "https://t.me/share/url?url="
+                            + quote(link, safe="")
+                            + "&text="
+                            + quote(ui(language, "share_text"), safe="")
+                        ),
+                    )
+                ],
+                [InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")],
+            ]
         ),
     )
 
@@ -1229,10 +1493,49 @@ async def support_callback(callback: CallbackQuery) -> None:
         InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text=rt.settings.support_label, url=rt.settings.support_link)],
+                [InlineKeyboardButton(text=ui(language, "support_ticket"), callback_data="shop:ticket:new")],
                 [InlineKeyboardButton(text=ui(language, "home"), callback_data="shop:home")],
             ]
         ),
     )
+
+
+@router.callback_query(F.data == "shop:ticket:new")
+async def new_support_ticket_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    await state.set_state(legacy.SupportTicketStates.waiting_message)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(legacy.t(language, "support_ticket_prompt"))
+
+
+@router.callback_query(F.data.startswith("shop:ticket:reply:"))
+async def support_ticket_reply_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    language = await legacy.ensure_callback_user(callback)
+    if language not in legacy.LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        ticket_id = int((callback.data or "").split(":", maxsplit=3)[-1])
+    except ValueError:
+        await callback.answer(legacy.t(language, "generic_error"), show_alert=True)
+        return
+    ticket = await legacy.get_runtime().db.get_support_ticket(ticket_id)
+    if (
+        ticket is None
+        or int(ticket["user_id"]) != callback.from_user.id
+        or str(ticket["status"]) != "open"
+    ):
+        await callback.answer(legacy.t(language, "support_ticket_already_closed"), show_alert=True)
+        return
+    await state.set_state(legacy.SupportTicketStates.waiting_message)
+    await state.update_data(ticket_id=ticket_id)
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(legacy.t(language, "support_ticket_prompt"))
 
 
 @router.callback_query(F.data == "shop:language")
@@ -1275,7 +1578,14 @@ async def _validated_product_checkout(
     language: str,
     product_key: str,
     quantity: int,
+    event: str | None = None,
 ) -> legacy.Product | None:
+    """Check that this order still makes sense, and record the chosen method.
+
+    ``event`` is recorded here rather than in each payment handler so the funnel
+    counts only choices that survived validation, and so a new payment method
+    cannot be added without deciding what it is called in the statistics.
+    """
     product = legacy.get_runtime().settings.products.get(product_key)
     if product is None:
         await callback.answer(legacy.t(language, "generic_error"), show_alert=True)
@@ -1284,6 +1594,8 @@ async def _validated_product_checkout(
     if quantity < 1 or quantity > stock:
         await callback.answer(ui(language, "quantity_invalid", available=stock), show_alert=True)
         return None
+    if event is not None:
+        await legacy.get_runtime().db.track_event(callback.from_user.id, event, product_key)
     return product
 
 
@@ -1302,19 +1614,21 @@ async def pay_cpay_callback(callback: CallbackQuery) -> None:
         quantity = int(parts[3])
     except ValueError:
         quantity = 0
-    product = await _validated_product_checkout(callback, language, product_key, quantity)
+    product = await _validated_product_checkout(
+        callback, language, product_key, quantity, "pay_cryptobot"
+    )
     if product is None:
         return
     rt = legacy.get_runtime()
     local_total = legacy.product_amount(rt.settings, product, language) * quantity
-    base_total = product.price_cents * quantity
+    base_total = legacy.discounted_product_usd_cents(product) * quantity
     fiat = legacy.currency_for_language(language)
     try:
         order_id, invoice = await legacy.create_payment_for_order(
             user_id=callback.from_user.id,
             product_key=product_key,
             amount_cents=local_total,
-            description=f"{product.title.get(language, product.key)} x{quantity}",
+            description=f"{legacy.product_label(product, language)} x{quantity}",
             fiat=fiat,
             quantity=quantity,
             balance_amount_cents=base_total,
@@ -1329,7 +1643,7 @@ async def pay_cpay_callback(callback: CallbackQuery) -> None:
         ui(
             language,
             "invoice_created",
-            product=html.escape(product.title.get(language, product.key)),
+            product=html.escape(legacy.product_label(product, language)),
             quantity=quantity,
             amount=legacy.format_fiat_price(local_total, fiat),
         ),
@@ -1394,10 +1708,12 @@ async def pay_balance_callback(callback: CallbackQuery, bot: Bot) -> None:
         quantity = int(parts[3])
     except ValueError:
         quantity = 0
-    product = await _validated_product_checkout(callback, language, product_key, quantity)
+    product = await _validated_product_checkout(
+        callback, language, product_key, quantity, "pay_balance"
+    )
     if product is None:
         return
-    base_total = product.price_cents * quantity
+    base_total = legacy.discounted_product_usd_cents(product) * quantity
     balance = await legacy.get_runtime().db.get_balance_cents(callback.from_user.id)
     if balance < base_total:
         await callback.answer(ui(language, "balance_insufficient"), show_alert=True)
@@ -1412,13 +1728,14 @@ async def pay_balance_callback(callback: CallbackQuery, bot: Bot) -> None:
     settlement = await legacy.get_runtime().db.pay_order_with_balance(
         order_id,
         callback.from_user.id,
-        decrement_stock=True,
+        decrement_stock=legacy.get_runtime().settings.decrement_stock_on_payment,
     )
     if settlement is None or settlement.get("status") == "insufficient":
         await callback.answer(ui(language, "balance_insufficient"), show_alert=True)
         return
     await legacy.notify_admins_payment(bot, settlement)
     await legacy.broadcast_purchase_notification(bot, settlement)
+    await legacy.credit_referral_for_order(bot, settlement)
     await legacy.deliver_pending_orders(bot)
     await callback.answer(ui(language, "payment_done"), show_alert=True)
     await render_product(callback, language, product_key)
@@ -1439,14 +1756,16 @@ async def pay_crypto_callback(callback: CallbackQuery) -> None:
         quantity = int(parts[3])
     except ValueError:
         quantity = 0
-    product = await _validated_product_checkout(callback, language, product_key, quantity)
+    product = await _validated_product_checkout(
+        callback, language, product_key, quantity, "pay_crypto"
+    )
     if product is None:
         return
     rt = legacy.get_runtime()
     if not rt.settings.crypto_wallets:
         await callback.answer(ui(language, "crypto_unavailable"), show_alert=True)
         return
-    base_total = product.price_cents * quantity
+    base_total = legacy.discounted_product_usd_cents(product) * quantity
     order_id = await create_non_invoice_order(
         callback.from_user.id,
         product_key,
@@ -1597,7 +1916,7 @@ async def create_direct_crypto_payment(
     )
     await link_manual_order(payment_id, order_id)
     product = rt.settings.products.get(str(order["product_key"]))
-    product_name = product.title.get(language, product.key) if product else str(order["product_key"])
+    product_name = legacy.product_label(product, language) if product else str(order["product_key"])
     text = ui(
         language,
         "crypto_instructions",
@@ -1720,10 +2039,15 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
     language = await rt.db.get_language(user_id) or "en"
     settlement: dict[str, object] | None = None
     if approve and order_id is not None:
-        settlement = await rt.db.pay_order_with_balance(order_id, user_id, decrement_stock=True)
+        settlement = await rt.db.pay_order_with_balance(
+            order_id,
+            user_id,
+            decrement_stock=rt.settings.decrement_stock_on_payment,
+        )
         if settlement is not None and settlement.get("status") != "insufficient":
             await legacy.notify_admins_payment(bot, settlement)
             await legacy.broadcast_purchase_notification(bot, settlement)
+            await legacy.credit_referral_for_order(bot, settlement)
             if settlement.get("delivery_status") == "waiting_stock":
                 await bot.send_message(user_id, legacy.preorder_notice(language))
                 await legacy.notify_admins_waiting_stock(bot, settlement)
@@ -1793,6 +2117,108 @@ async def decide_manual_payment(callback: CallbackQuery, bot: Bot, approve: bool
 # ---------------------------------------------------------------------------
 
 
+COMMAND_MENU: tuple[tuple[str, dict[str, str]], ...] = (
+    (
+        "menu",
+        {
+            "ru": "Главное меню магазина",
+            "en": "Open the shop menu",
+            "zh": "打开商店菜单",
+            "vi": "Mở menu cửa hàng",
+            "hi": "स्टोर मेन्यू खोलें",
+        },
+    ),
+    (
+        "balance",
+        {
+            "ru": "Баланс и пополнение",
+            "en": "Balance and top-up",
+            "zh": "余额与充值",
+            "vi": "Số dư và nạp tiền",
+            "hi": "बैलेंस और टॉप-अप",
+        },
+    ),
+    (
+        "settings",
+        {
+            "ru": "Настройки уведомлений",
+            "en": "Notification settings",
+            "zh": "通知设置",
+            "vi": "Cài đặt thông báo",
+            "hi": "सूचना सेटिंग्स",
+        },
+    ),
+    (
+        "invite",
+        {
+            "ru": "Реферальная ссылка и бонусы",
+            "en": "Referral link and bonuses",
+            "zh": "邀请链接与返利",
+            "vi": "Liên kết giới thiệu và hoa hồng",
+            "hi": "रेफ़रल लिंक और बोनस",
+        },
+    ),
+    (
+        "language",
+        {
+            "ru": "Сменить язык",
+            "en": "Change language",
+            "zh": "更换语言",
+            "vi": "Đổi ngôn ngữ",
+            "hi": "भाषा बदलें",
+        },
+    ),
+    (
+        "help",
+        {
+            "ru": "Поддержка и правила",
+            "en": "Support and terms",
+            "zh": "客服与条款",
+            "vi": "Hỗ trợ và điều khoản",
+            "hi": "सहायता और शर्तें",
+        },
+    ),
+    (
+        "cancel",
+        {
+            "ru": "Отменить текущее действие",
+            "en": "Cancel what you are doing",
+            "zh": "取消当前操作",
+            "vi": "Huỷ thao tác hiện tại",
+            "hi": "मौजूदा क्रिया रद्द करें",
+        },
+    ),
+)
+
+
+async def publish_command_menu(bot: Bot) -> None:
+    """Fill the button next to the message field with the customer commands.
+
+    Admin commands are deliberately absent: this list is public, and every
+    private chat sees the same one. ``/admin`` still works for whoever is in
+    ``ADMIN_IDS`` — it is simply not advertised.
+    """
+    default = [
+        BotCommand(command=name, description=labels["en"]) for name, labels in COMMAND_MENU
+    ]
+    try:
+        await bot.set_my_commands(default, scope=BotCommandScopeAllPrivateChats())
+        for code in legacy.LANGUAGES:
+            if code == "en":
+                continue
+            await bot.set_my_commands(
+                [
+                    BotCommand(command=name, description=labels.get(code, labels["en"]))
+                    for name, labels in COMMAND_MENU
+                ],
+                scope=BotCommandScopeAllPrivateChats(),
+                language_code=code,
+            )
+    except Exception:
+        # A bot that cannot advertise its commands still works; this is cosmetic.
+        logger.exception("Could not publish the command menu")
+
+
 async def main() -> None:
     settings = legacy.load_settings()
     db = legacy.Database(settings.db_path)
@@ -1824,6 +2250,7 @@ async def main() -> None:
     try:
         crypto_info = await crypto.get_me()
         logger.info("Crypto Pay app connected: %s", crypto_info.get("name", "unknown"))
+        await publish_command_menu(bot)
         logger.info("Starting Telegram polling with inline storefront v2")
         await dispatcher.start_polling(bot)
     finally:
