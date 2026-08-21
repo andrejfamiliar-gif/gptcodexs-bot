@@ -43,6 +43,9 @@ jobs:
       # the normal Crypto Pay invoice.
       CRYPTO_WALLETS: ${{ secrets.CRYPTO_WALLETS }}
       MANUAL_CRYPTO_NOTE_HOURS: "24"
+      # Quoted to the buyer when an order is paid before the accounts are
+      # loaded, so treat it as a promise rather than a guess.
+      PREORDER_DELIVERY_HOURS: "24"
       TELEGRAM_PROXY: ""
       DB_PATH: shop.sqlite3
       PAYMENT_POLL_SECONDS: "15"

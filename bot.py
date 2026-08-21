@@ -24,11 +24,15 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from config import (
     Product,
     Settings,
+    convert_usd_cents,
     currency_for_language,
     format_fiat_price,
+    format_local_amount_plain,
     format_local_price,
     format_usd,
     load_settings,
+    parse_local_amount_cents,
+    product_title,
 )
 from database import Database
 from i18n import (
@@ -177,7 +181,11 @@ async def sync_runtime_products() -> None:
         key = str(row["product_key"])
         products[key] = Product(
             key=key,
-            title={
+            # The products table stores three title columns; a product name is
+            # the same string in every language anyway, so the English one is
+            # copied across the rest instead of falling back to the raw key.
+            title=product_title(str(row["title_en"] or row["title_ru"] or key))
+            | {
                 "ru": str(row["title_ru"]),
                 "en": str(row["title_en"]),
                 "zh": str(row["title_zh"]),
@@ -185,11 +193,19 @@ async def sync_runtime_products() -> None:
             price_cents=int(row["price_usd_cents"]),
             category=str(row["category"] or "catalog"),
         )
+        usd_cents = int(row["price_usd_cents"])
         regional_prices[key] = {
-            "en": int(row["price_usd_cents"]),
+            "en": usd_cents,
             "ru": int(row["price_rub_cents"]),
             "zh": int(row["price_cny_cents"]),
         }
+        # Currencies without their own column track the USD price at the
+        # configured rate. Without this the price lookup would fall back to USD
+        # cents and then render them under a ₫ or ₹ sign, which is not a
+        # rounding error but a hundredfold one.
+        for language, rate in rt.settings.currency_rates.items():
+            if language not in regional_prices[key]:
+                regional_prices[key][language] = convert_usd_cents(usd_cents, rate)
     rt.settings.products.clear()
     rt.settings.products.update(products)
     rt.settings.regional_prices.clear()
@@ -253,11 +269,34 @@ def admin_stock_keyboard() -> InlineKeyboardMarkup:
     rows.extend(
         [
             [InlineKeyboardButton(text="🗑 Удалить данные по ID", callback_data="admin:stock:remove")],
+            [InlineKeyboardButton(text="📣 Объявить о поступлении", callback_data="admin:stock:announce")],
             [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin:stock")],
             [InlineKeyboardButton(text="⬅️ В панель", callback_data="admin:home")],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_announce_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Two taps before a broadcast to everyone, because one tap is not undoable."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Отправить всем",
+                    callback_data="admin:stock:announce:go",
+                    style=ButtonStyle.SUCCESS,
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="✖️ Отмена",
+                    callback_data="admin:stock",
+                    style=ButtonStyle.DANGER,
+                )
+            ],
+        ]
+    )
 
 
 def admin_products_keyboard() -> InlineKeyboardMarkup:
@@ -391,18 +430,20 @@ async def admin_stock_text() -> str:
 
 async def admin_products_text() -> str:
     rt = get_runtime()
-    lines = ["🛍 Товары и цены", "", "Формат цены: USD · RUB · CNY", ""]
+    lines = ["🛍 Товары и цены", "", "Цена в каждой валюте магазина", ""]
     if not rt.settings.products:
         lines.append("Товаров пока нет.")
         return "\n".join(lines)
     for key, product in rt.settings.products.items():
-        prices = rt.settings.regional_prices.get(key, {})
+        # Every currency the shop sells in, not just the original three: a price
+        # the owner cannot see in the panel is a price they cannot check.
+        prices = " · ".join(
+            product_price(rt.settings, product, language) for language in LANGUAGES
+        )
         lines.append(
             f"• <b>{html.escape(product_label(product))}</b> "
             f"(<code>{html.escape(key)}</code>)\n"
-            f"  ${prices.get('en', product.price_cents) / 100:.2f} · "
-            f"{prices.get('ru', product.price_cents) / 100:.2f} ₽ · "
-            f"¥{prices.get('zh', product.price_cents) / 100:.2f}"
+            f"  {prices}"
         )
     return "\n".join(lines)
 
@@ -437,6 +478,22 @@ def top_up_price_labels(settings: Settings, language: str) -> dict[int, str]:
         amount: localized_price(settings, language, amount * 100)
         for amount in (2, 5, 10)
     }
+
+
+def top_up_prompt_text(language: str) -> str:
+    """"Enter an amount" — naming the currency the buyer is expected to type in."""
+    return t(language, "top_up_other", currency=currency_for_language(language))
+
+
+def invalid_amount_text(language: str) -> str:
+    """"That is not a valid amount", with an example the buyer can actually type.
+
+    The example is the smallest preset top-up rendered in the buyer's own
+    currency, so a Vietnamese buyer sees 52000 rather than 2.00 and does not
+    keep retyping a figure the bot will reject as too small.
+    """
+    rates = get_runtime().settings.currency_rates
+    return t(language, "top_up_invalid", example=format_local_amount_plain(200, language, rates))
 
 
 def quantity_prompt(language: str, product_name: str, available: int) -> str:
@@ -608,6 +665,49 @@ async def notify_admins_payment(bot: Bot, settlement: dict[str, object]) -> None
             logger.exception("Could not notify admin %s about payment", admin_id)
 
 
+async def notify_admins_waiting_stock(bot: Bot, settlement: dict[str, object]) -> None:
+    """Tell the admins that a paid order has nothing to deliver.
+
+    Selling against display stock means an order can legitimately outrun the
+    accounts on hand. The buyer was promised delivery within a fixed window, so
+    this has to reach a human rather than sit in the ``waiting_stock`` table:
+    once accounts are loaded ``deliver_pending_orders`` finishes the job by
+    itself, but nobody loads them if nobody knows.
+    """
+    rt = get_runtime()
+    if not rt.settings.admin_ids:
+        return
+    product_key = str(settlement["product_key"])
+    product = rt.settings.products.get(product_key)
+    product_name = product.title.get("ru", product.key) if product else product_key
+    stock = (await rt.db.actual_stock()).get(product_key, 0)
+    notification = (
+        "⚠️ Оплаченный заказ ждёт склад\n"
+        f"Заказ: <code>#{settlement['order_id']}</code>\n"
+        f"Товар: {html.escape(product_name)}\n"
+        f"Количество: {int(settlement.get('quantity', 1))}\n"
+        f"Реальных аккаунтов в наличии: {stock}\n"
+        f"Покупателю обещана выдача за {rt.settings.preorder_delivery_hours} ч.\n"
+        "Загрузите аккаунты через /admin → Склад — заказ выдастся сам."
+    )
+    for admin_id in rt.settings.admin_ids:
+        try:
+            await bot.send_message(admin_id, notification)
+        except Exception:
+            logger.exception("Could not notify admin %s about waiting stock", admin_id)
+
+
+def preorder_notice(language: str) -> str:
+    """"Payment accepted, delivery within N hours" in the buyer's language."""
+    rt = get_runtime()
+    return t(
+        language,
+        "no_stock_after_payment",
+        support=support_contact(rt.settings),
+        hours=rt.settings.preorder_delivery_hours,
+    )
+
+
 def masked_buyer(username: str | None, user_id: int) -> str:
     raw = f"@{username}" if username else str(user_id)
     safe = html.escape(raw)
@@ -640,6 +740,18 @@ async def broadcast_purchase_notification(bot: Bot, settlement: dict[str, object
     for row in await rt.db.list_purchase_notification_users():
         language = str(row["language"] or "en")
         product_name = product_label(product, language) if product else product_key
+        # Each recipient sees the price in their own currency. The settlement
+        # currency is whatever the buyer paid in, and a Vietnamese reader has no
+        # use for someone else's dollar figure.
+        if product is not None:
+            price = format_fiat_price(
+                product_amount(rt.settings, product, language) * max(quantity, 1),
+                currency_for_language(language),
+            )
+        elif currency == "USD":
+            price = localized_price(rt.settings, language, amount_cents)
+        else:
+            price = format_fiat_price(amount_cents, currency)
         try:
             await bot.send_message(
                 row["user_id"],
@@ -648,7 +760,7 @@ async def broadcast_purchase_notification(bot: Bot, settlement: dict[str, object
                     "purchase_notification",
                     product=html.escape(product_name),
                     quantity=quantity,
-                    price=format_fiat_price(amount_cents, currency),
+                    price=price,
                     buyer=buyer,
                 ),
                 reply_markup=purchase_notification_keyboard(language),
@@ -669,10 +781,8 @@ async def settle_invoice(bot: Bot, order_id: int) -> dict[str, object] | None:
         await broadcast_purchase_notification(bot, settlement)
     if settlement is not None and settlement["delivery_status"] == "waiting_stock":
         language = await rt.db.get_language(settlement["user_id"]) or "en"
-        await bot.send_message(
-            settlement["user_id"],
-            t(language, "no_stock_after_payment", support=support_contact(rt.settings)),
-        )
+        await bot.send_message(settlement["user_id"], preorder_notice(language))
+        await notify_admins_waiting_stock(bot, settlement)
     await deliver_pending_orders(bot)
     return settlement
 
@@ -898,7 +1008,7 @@ async def topup_amount_callback(callback: CallbackQuery, state: FSMContext) -> N
         await state.set_state(TopUpStates.waiting_amount)
         await callback.answer()
         if callback.message is not None:
-            await callback.message.answer(t(language, "top_up_other"))
+            await callback.message.answer(top_up_prompt_text(language))
         return
     try:
         amount_cents = int(choice)
@@ -933,7 +1043,7 @@ async def offer_payment_methods(
     """
     rt = get_runtime()
     if amount_cents < 1 or amount_cents > 1_000_000:
-        await message.answer(t(language, "top_up_invalid"))
+        await message.answer(invalid_amount_text(language))
         return
     if not rt.settings.crypto_wallets:
         await send_topup_invoice(message, user_id, language, amount_cents)
@@ -961,7 +1071,7 @@ def parse_amount_cents(raw_value: str) -> int | None:
 async def send_topup_invoice(message: Message, user_id: int, language: str, amount_cents: int) -> None:
     rt = get_runtime()
     if amount_cents < 1 or amount_cents > 1_000_000:
-        await message.answer(t(language, "top_up_invalid"))
+        await message.answer(invalid_amount_text(language))
         return
     try:
         order_id, invoice = await create_payment_for_order(
@@ -992,9 +1102,13 @@ async def custom_topup_amount_handler(message: Message, state: FSMContext) -> No
         await state.clear()
         await send_language_prompt(message)
         return
-    amount_cents = parse_amount_cents(message.text or "")
+    amount_cents = parse_local_amount_cents(
+        message.text or "",
+        language,
+        get_runtime().settings.currency_rates,
+    )
     if amount_cents is None:
-        await message.answer(t(language, "top_up_invalid"))
+        await message.answer(invalid_amount_text(language))
         return
     await state.clear()
     await offer_payment_methods(
@@ -1196,7 +1310,7 @@ async def start_manual_payment(
         await message.answer(t(language, "mpay_stale"))
         return
     if amount_cents < 1 or amount_cents > 1_000_000:
-        await message.answer(t(language, "top_up_invalid"))
+        await message.answer(invalid_amount_text(language))
         return
     wallet = wallets[index]
 
@@ -1280,6 +1394,44 @@ async def mpay_hash_callback(callback: CallbackQuery, state: FSMContext) -> None
     await callback.answer()
     if callback.message is not None:
         await callback.message.answer(t(language, "mpay_ask_hash"))
+
+
+@router.callback_query(F.data.startswith("mpay:check:"))
+async def mpay_check_callback(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    """"Check payment" — hand the request to the admins without asking for a hash.
+
+    This is what the primary button under a transfer request now does. The
+    buyer transfers, taps once, and the request moves to ``pending``; the admin
+    finds the transfer by address and amount. ``mpay:hash:`` is still handled
+    above for anyone who supplies a hash anyway, and the status guard inside
+    ``request_manual_payment_review`` makes a double tap a no-op.
+    """
+    rt = get_runtime()
+    language = await ensure_callback_user(callback)
+    if language not in LANGUAGES:
+        await callback.answer("Choose a language first", show_alert=True)
+        return
+    try:
+        payment_id = int((callback.data or "").split(":", maxsplit=2)[2])
+    except ValueError:
+        await callback.answer(t(language, "generic_error"), show_alert=True)
+        return
+    payment = await rt.db.request_manual_payment_review(payment_id, callback.from_user.id)
+    if payment is None:
+        await callback.answer(t(language, "mpay_stale"), show_alert=True)
+        return
+    await state.clear()
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(
+            t(
+                language,
+                "mpay_submitted",
+                payment_id=payment_id,
+                support=support_contact(rt.settings),
+            )
+        )
+    await notify_admins_manual_payment(bot, payment)
 
 
 @router.callback_query(F.data.startswith("mpay:cancel:"))
@@ -1380,6 +1532,10 @@ def manual_payment_admin_text(row: object) -> str:
         # Stated plainly rather than shown as a number the bot never computed.
         else "не рассчитано — курс был недоступен"
     )
+    # A buyer who taps "проверить оплату" never supplies a hash, so say so
+    # instead of printing "None" and leaving the admin to guess.
+    tx_hash = row["tx_hash"]  # type: ignore[index]
+    hash_text = str(tx_hash) if tx_hash else "не указан — покупатель нажал «проверить оплату»"
     return t(
         "ru",
         "mpay_admin_new",
@@ -1390,7 +1546,7 @@ def manual_payment_admin_text(row: object) -> str:
         fiat_amount=format_usd(int(row["amount_cents"])),  # type: ignore[index]
         crypto_amount=html.escape(expected),
         address=html.escape(str(row["address"])),  # type: ignore[index]
-        tx_hash=html.escape(str(row["tx_hash"])),  # type: ignore[index]
+        tx_hash=html.escape(hash_text),
     )
 
 
@@ -1803,10 +1959,8 @@ async def balance_payment_callback(callback: CallbackQuery, bot: Bot) -> None:
     await notify_admins_payment(bot, settlement)
     await broadcast_purchase_notification(bot, settlement)
     if settlement["delivery_status"] == "waiting_stock":
-        await bot.send_message(
-            callback.from_user.id,
-            t(language, "no_stock_after_payment", support=support_contact(rt.settings)),
-        )
+        await bot.send_message(callback.from_user.id, preorder_notice(language))
+        await notify_admins_waiting_stock(bot, settlement)
     await deliver_pending_orders(bot)
     await callback.answer(
         t(language, "payment_confirmed"),
@@ -1845,10 +1999,7 @@ async def check_payment_callback(callback: CallbackQuery, bot: Bot) -> None:
     if invoice.get("status") == "paid":
         settlement = await settle_invoice(bot, order_id)
         if settlement is not None and settlement["delivery_status"] == "waiting_stock":
-            await callback.answer(
-                t(language, "no_stock_after_payment", support=html.escape(rt.settings.support_label)),
-                show_alert=True,
-            )
+            await callback.answer(preorder_notice(language), show_alert=True)
         else:
             await callback.answer(
                 t(language, "top_up_confirmed" if order["product_key"] == "balance_topup" else "payment_confirmed")
@@ -2019,6 +2170,39 @@ async def admin_stock_callback(callback: CallbackQuery) -> None:
     if not await admin_only_callback(callback):
         return
     await callback.answer()
+    await edit_admin_message(callback, await admin_stock_text(), admin_stock_keyboard())
+
+
+@router.callback_query(F.data == "admin:stock:announce")
+async def admin_stock_announce_callback(callback: CallbackQuery) -> None:
+    """Ask before broadcasting a restock, and say how many people it reaches."""
+    if not await admin_only_callback(callback):
+        return
+    recipients = len(await get_runtime().db.list_users_for_broadcast())
+    await callback.answer()
+    await edit_admin_message(
+        callback,
+        "📣 Объявление о поступлении\n\n"
+        f"Сообщение «Новое поступление» получат: <b>{recipients}</b>\n"
+        "Какие именно товары пришли — не указывается.\n\n"
+        "Отправлять только после реального пополнения склада или счётчика.",
+        admin_announce_confirm_keyboard(),
+    )
+
+
+@router.callback_query(F.data == "admin:stock:announce:go")
+async def admin_stock_announce_send_callback(callback: CallbackQuery, bot: Bot) -> None:
+    if not await admin_only_callback(callback):
+        return
+    await callback.answer("Рассылка началась")
+    await broadcast_stock_replenished(bot)
+    # The waitlist message names a product and says it can be bought now, so it
+    # only goes out for products that are genuinely on offer.
+    offered = await get_runtime().db.available_stock()
+    for product_key in get_runtime().settings.products:
+        if offered.get(product_key, 0) > 0:
+            await notify_waitlist_for_product(bot, product_key)
+    await deliver_pending_orders(bot)
     await edit_admin_message(callback, await admin_stock_text(), admin_stock_keyboard())
 
 

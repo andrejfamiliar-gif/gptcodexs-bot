@@ -1,16 +1,35 @@
 from __future__ import annotations
 
+from typing import TypeVar
+
 from aiogram.enums import ButtonStyle
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 
-LANGUAGES = ("zh", "en", "ru")
+_T = TypeVar("_T")
+
+
+LANGUAGES = ("zh", "en", "ru", "vi", "hi")
 
 LANGUAGE_BUTTONS = (
     ("zh", "🇨🇳 中文"),
     ("en", "🇺🇸 English"),
     ("ru", "🇷🇺 Русский"),
+    ("vi", "🇻🇳 Tiếng Việt"),
+    ("hi", "🇮🇳 हिन्दी"),
 )
+
+
+def _pick(labels: dict[str, _T], language: str) -> _T:
+    """Look up a per-language label, falling back to English.
+
+    Every keyboard below carries its own small label dict. Adding a language to
+    ``LANGUAGES`` without touching all of them would otherwise raise KeyError
+    inside a handler, which reaches the buyer as a dead button. Falling back to
+    English keeps the menu usable while a translation is still missing.
+    """
+    value = labels.get(language)
+    return labels["en"] if value is None else value
 
 
 TEXTS: dict[str, dict[str, str]] = {
@@ -54,15 +73,19 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "💳 Choose a top-up amount:",
         "ru": "💳 Выберите сумму пополнения:",
     },
+    # The buyer types the amount in their own currency, so both the prompt and
+    # the "that is not a number" hint have to name that currency and show an
+    # example in it. A dollar example under a ₫ prompt is how someone ends up
+    # typing 2.50 and being told it is too small.
     "top_up_other": {
-        "zh": "请输入充值金额（USD）：",
-        "en": "Enter a top-up amount in USD:",
-        "ru": "Введите сумму пополнения в USD:",
+        "zh": "请输入充值金额（{currency}）：",
+        "en": "Enter a top-up amount in {currency}:",
+        "ru": "Введите сумму пополнения в {currency}:",
     },
     "top_up_invalid": {
-        "zh": "请输入有效金额，例如 2.50。",
-        "en": "Enter a valid amount, for example 2.50.",
-        "ru": "Введите корректную сумму, например 2.50.",
+        "zh": "请输入有效金额，例如 {example}。",
+        "en": "Enter a valid amount, for example {example}.",
+        "ru": "Введите корректную сумму, например {example}.",
     },
     "top_up_invoice": {
         "zh": "充值账单已创建：{amount}\nCrypto Pay 账单：{usd_amount}\n点击下方按钮完成支付。\n支付成功后余额会自动更新。",
@@ -84,47 +107,62 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "{asset} works on several networks. Pick the one your wallet actually uses:\n\n⚠️ Send on the wrong network and the funds cannot be recovered.",
         "ru": "{asset} работает в нескольких сетях. Выберите ту, которой реально пользуется ваш кошелёк:\n\n⚠️ Перевод в неверной сети вернуть невозможно.",
     },
+    # The buyer is shown the coin amount, the rate and the address, and nothing
+    # else: no request number, no fiat restatement of the amount they just chose,
+    # and no hash instructions — verification is one "check payment" tap.
+    # ``{payment_id}`` and ``{fiat_amount}`` are still accepted as arguments by
+    # ``str.format`` even though no language uses them, so callers stay simple.
     "mpay_instructions": {
         "zh": (
-            "💸 转账明细 #{payment_id}\n\n"
             "币种：<b>{asset}</b>\n"
             "网络：<b>{network}</b>\n"
             "转账金额：<b>{crypto_amount} {asset}</b>\n"
-            "折合：{fiat_amount}\n"
             "汇率：1 {asset} = {rate}（{rate_at} UTC）\n\n"
             "收款地址：\n<code>{address}</code>\n\n"
             "⚠️ 请务必使用 <b>{network}</b> 网络，其他网络的转账无法找回。\n"
-            "转账完成后请发送交易哈希（tx hash），管理员核对链上记录后为您入账。\n"
             "本页面有效期 {hours} 小时。"
         ),
         "en": (
-            "💸 Transfer details #{payment_id}\n\n"
             "Coin: <b>{asset}</b>\n"
             "Network: <b>{network}</b>\n"
             "Amount to send: <b>{crypto_amount} {asset}</b>\n"
-            "Equivalent: {fiat_amount}\n"
             "Rate: 1 {asset} = {rate} ({rate_at} UTC)\n\n"
             "Address:\n<code>{address}</code>\n\n"
             "⚠️ Use the <b>{network}</b> network. A transfer on any other network cannot be recovered.\n"
-            "Send the transaction hash once the transfer is done; an admin checks it on-chain and credits you.\n"
             "This request is valid for {hours} hours."
         ),
         "ru": (
-            "💸 Реквизиты перевода #{payment_id}\n\n"
             "Монета: <b>{asset}</b>\n"
             "Сеть: <b>{network}</b>\n"
             "Сумма перевода: <b>{crypto_amount} {asset}</b>\n"
-            "Это примерно {fiat_amount}\n"
             "Курс: 1 {asset} = {rate} ({rate_at} UTC)\n\n"
             "Адрес:\n<code>{address}</code>\n\n"
             "⚠️ Переводите только в сети <b>{network}</b>. Перевод в другой сети вернуть нельзя.\n"
-            "После перевода отправьте хеш транзакции — админ сверит его в блокчейне и зачислит сумму.\n"
-            "Реквизиты действительны {hours} ч."
+            "Заявка действительна {hours} ч."
+        ),
+        "vi": (
+            "Đồng tiền: <b>{asset}</b>\n"
+            "Mạng: <b>{network}</b>\n"
+            "Số tiền cần chuyển: <b>{crypto_amount} {asset}</b>\n"
+            "Tỷ giá: 1 {asset} = {rate} ({rate_at} UTC)\n\n"
+            "Địa chỉ:\n<code>{address}</code>\n\n"
+            "⚠️ Chỉ chuyển trên mạng <b>{network}</b>. Chuyển sai mạng sẽ không thể lấy lại.\n"
+            "Yêu cầu này có hiệu lực trong {hours} giờ."
+        ),
+        "hi": (
+            "सिक्का: <b>{asset}</b>\n"
+            "नेटवर्क: <b>{network}</b>\n"
+            "भेजने की राशि: <b>{crypto_amount} {asset}</b>\n"
+            "दर: 1 {asset} = {rate} ({rate_at} UTC)\n\n"
+            "पता:\n<code>{address}</code>\n\n"
+            "⚠️ केवल <b>{network}</b> नेटवर्क पर भेजें। किसी दूसरे नेटवर्क पर भेजी गई राशि वापस नहीं मिल सकती।\n"
+            "यह अनुरोध {hours} घंटे तक मान्य है।"
         ),
     },
+    # Without a rate the fiat amount is the only figure the bot can state, so it
+    # stays — replacing it with a made-up coin amount would be worse.
     "mpay_instructions_no_rate": {
         "zh": (
-            "💸 转账明细 #{payment_id}\n\n"
             "币种：<b>{asset}</b>\n"
             "网络：<b>{network}</b>\n"
             "应付金额：<b>{fiat_amount}</b>\n\n"
@@ -132,11 +170,9 @@ TEXTS: dict[str, dict[str, str]] = {
             "ℹ️ 机器人暂时无法获取 {asset} 的汇率，因此无法显示精确的币种数量。"
             "请按当前市场价转入等值金额，管理员将按到账时的汇率核对。\n"
             "⚠️ 请务必使用 <b>{network}</b> 网络，其他网络的转账无法找回。\n"
-            "转账完成后请发送交易哈希（tx hash）。\n"
             "本页面有效期 {hours} 小时。"
         ),
         "en": (
-            "💸 Transfer details #{payment_id}\n\n"
             "Coin: <b>{asset}</b>\n"
             "Network: <b>{network}</b>\n"
             "Amount owed: <b>{fiat_amount}</b>\n\n"
@@ -144,11 +180,9 @@ TEXTS: dict[str, dict[str, str]] = {
             "ℹ️ The bot has no rate for {asset} right now, so it cannot show an exact coin amount. "
             "Send the equivalent at the current market rate; the admin will check it against the rate at the time it arrives.\n"
             "⚠️ Use the <b>{network}</b> network. A transfer on any other network cannot be recovered.\n"
-            "Send the transaction hash once the transfer is done.\n"
             "This request is valid for {hours} hours."
         ),
         "ru": (
-            "💸 Реквизиты перевода #{payment_id}\n\n"
             "Монета: <b>{asset}</b>\n"
             "Сеть: <b>{network}</b>\n"
             "К оплате: <b>{fiat_amount}</b>\n\n"
@@ -156,8 +190,27 @@ TEXTS: dict[str, dict[str, str]] = {
             "ℹ️ Бот сейчас не знает курс {asset}, поэтому не может показать точное количество монет. "
             "Переведите эквивалент по текущему рыночному курсу — админ сверит сумму по курсу на момент зачисления.\n"
             "⚠️ Переводите только в сети <b>{network}</b>. Перевод в другой сети вернуть нельзя.\n"
-            "После перевода отправьте хеш транзакции.\n"
-            "Реквизиты действительны {hours} ч."
+            "Заявка действительна {hours} ч."
+        ),
+        "vi": (
+            "Đồng tiền: <b>{asset}</b>\n"
+            "Mạng: <b>{network}</b>\n"
+            "Số tiền phải trả: <b>{fiat_amount}</b>\n\n"
+            "Địa chỉ:\n<code>{address}</code>\n\n"
+            "ℹ️ Bot hiện không có tỷ giá {asset} nên không thể hiển thị số lượng coin chính xác. "
+            "Hãy chuyển số tiền tương đương theo giá thị trường hiện tại; quản trị viên sẽ đối chiếu theo tỷ giá lúc nhận được.\n"
+            "⚠️ Chỉ chuyển trên mạng <b>{network}</b>. Chuyển sai mạng sẽ không thể lấy lại.\n"
+            "Yêu cầu này có hiệu lực trong {hours} giờ."
+        ),
+        "hi": (
+            "सिक्का: <b>{asset}</b>\n"
+            "नेटवर्क: <b>{network}</b>\n"
+            "देय राशि: <b>{fiat_amount}</b>\n\n"
+            "पता:\n<code>{address}</code>\n\n"
+            "ℹ️ बॉट के पास अभी {asset} की दर नहीं है, इसलिए वह सटीक सिक्का राशि नहीं दिखा सकता। "
+            "वर्तमान बाज़ार दर पर समकक्ष राशि भेजें; राशि मिलने के समय की दर से एडमिन उसे जाँचेगा।\n"
+            "⚠️ केवल <b>{network}</b> नेटवर्क पर भेजें। किसी दूसरे नेटवर्क पर भेजी गई राशि वापस नहीं मिल सकती।\n"
+            "यह अनुरोध {hours} घंटे तक मान्य है।"
         ),
     },
     "mpay_ask_hash": {
@@ -358,9 +411,24 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "🎉 Товар появился в наличии: {product}\nТеперь его можно купить.",
     },
     "no_stock_after_payment": {
-        "zh": "付款已收到，但该商品暂时缺货。请联系 {support}，我们会尽快处理订单。",
-        "en": "Payment received, but the item is temporarily out of stock. Contact {support} and we will process the order as soon as possible.",
-        "ru": "Оплата получена, но товар временно закончился. Напишите {support}, и мы обработаем заказ как можно скорее.",
+        "zh": (
+            "✅ 付款已收到。\n\n"
+            "该商品目前为预订状态，将在 {hours} 小时内自动发货。\n"
+            "账号准备好后机器人会立即发送给你，无需再次操作。\n"
+            "如有疑问请联系 {support}。"
+        ),
+        "en": (
+            "✅ Payment received.\n\n"
+            "This item is on pre-order and will be delivered automatically within {hours} h.\n"
+            "The bot sends the account as soon as it is ready — you do not need to do anything.\n"
+            "Questions: {support}."
+        ),
+        "ru": (
+            "✅ Оплата принята.\n\n"
+            "Товар оформлен как предзаказ, выдача в течение {hours} ч.\n"
+            "Бот отправит аккаунт автоматически, как только он будет готов — ничего делать не нужно.\n"
+            "Вопросы: {support}."
+        ),
     },
     "delivery_account": {
         "zh": "✅ 订单已完成\n商品：{product}\n\n你的数字商品：\n<pre>{payload}</pre>\n\n请不要把这些数据发送给其他人。",
@@ -413,19 +481,57 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Настройки уведомлений о покупках обновлены.",
     },
     "purchase_notification": {
-        "zh": "🛍 新订单\n商品：{product}\n数量：{quantity}\n价格：{price}\n买家：{buyer}",
-        "en": "🛍 New purchase\nProduct: {product}\nQuantity: {quantity}\nPrice: {price}\nBuyer: {buyer}",
-        "ru": "🛍 Новая покупка\nТовар: {product}\nКоличество: {quantity}\nЦена: {price}\nПокупатель: {buyer}",
+        "zh": (
+            "🛍 <b>新订单</b>\n"
+            "━━━━━━━━━━━━\n"
+            "📦 {product}\n"
+            "🔢 {quantity} 个\n"
+            "💵 {price}\n"
+            "👤 {buyer}"
+        ),
+        "en": (
+            "🛍 <b>New purchase</b>\n"
+            "━━━━━━━━━━━━\n"
+            "📦 {product}\n"
+            "🔢 {quantity} pcs\n"
+            "💵 {price}\n"
+            "👤 {buyer}"
+        ),
+        "ru": (
+            "🛍 <b>Новая покупка</b>\n"
+            "━━━━━━━━━━━━\n"
+            "📦 {product}\n"
+            "🔢 {quantity} шт.\n"
+            "💵 {price}\n"
+            "👤 {buyer}"
+        ),
     },
     "disable_purchase_notifications": {
         "zh": "🔕 关闭购买通知",
         "en": "🔕 Disable purchase notifications",
         "ru": "🔕 Отключить уведомления о покупках",
     },
+    # Deliberately does not say which products arrived: the owner asked for a
+    # plain "new stock is in" so the broadcast does not double as a price list.
     "stock_replenished": {
-        "zh": "📦 库存已补充\n已添加新的账号。",
-        "en": "📦 Stock replenished\nNew accounts have been added.",
-        "ru": "📦 Склад пополнен\nДобавлены новые аккаунты.",
+        "zh": (
+            "📦 <b>新到货</b>\n"
+            "━━━━━━━━━━━━\n"
+            "商店已上新账号。\n"
+            "打开「商品」查看当前库存。"
+        ),
+        "en": (
+            "📦 <b>New stock</b>\n"
+            "━━━━━━━━━━━━\n"
+            "Fresh accounts have arrived in the shop.\n"
+            "Open «Products» to see what is available."
+        ),
+        "ru": (
+            "📦 <b>Новое поступление</b>\n"
+            "━━━━━━━━━━━━\n"
+            "В магазине появились новые аккаунты.\n"
+            "Откройте «Товары», чтобы посмотреть наличие."
+        ),
     },
     "catalog": {
         "zh": "🛍 商品",
@@ -480,6 +586,382 @@ TEXTS: dict[str, dict[str, str]] = {
 }
 
 
+# Vietnamese and Hindi arrived after the table above was already three columns
+# wide, so they are kept as flat per-language dicts and merged in below. That
+# way a new language touches two places instead of all 74 entries, and the
+# completeness check at the bottom fails loudly on a missing key rather than
+# silently shipping English to a buyer who picked another language.
+_VI: dict[str, str] = {
+    "choose_language": "Vui lòng chọn ngôn ngữ:",
+    "language_saved": "Đã đổi ngôn ngữ.",
+    "welcome": "Chào mừng! Hãy chọn sản phẩm hoặc mở menu.",
+    "unknown_command": "Vui lòng dùng một trong các nút menu.",
+    "choose_pro_plan": "Chọn gói Pro:",
+    "choose_plus_plan": "Chọn loại tài khoản Plus:",
+    "balance": "💰 Số dư: {balance}\n\nBạn có thể nạp tiền qua Crypto Pay.",
+    "top_up": "💳 Chọn số tiền nạp:",
+    "top_up_other": "Nhập số tiền nạp bằng {currency}:",
+    "top_up_invalid": "Hãy nhập số tiền hợp lệ, ví dụ {example}.",
+    "top_up_invoice": (
+        "Đã tạo hoá đơn nạp tiền: {amount}\n"
+        "Hoá đơn Crypto Pay: {usd_amount}\n"
+        "Nhấn nút bên dưới để thanh toán.\n"
+        "Số dư sẽ được cập nhật tự động sau khi thanh toán."
+    ),
+    "mpay_method": (
+        "Chọn cách thanh toán {amount}:\n\n"
+        "• Crypto Pay — cộng tiền tự động, nhanh nhất.\n"
+        "• Cryptocurrency — chuyển trực tiếp vào ví của chúng tôi; quản trị viên kiểm tra rồi cộng tiền cho bạn."
+    ),
+    "mpay_choose_asset": "Chọn đồng tiền (số tiền: {amount}):",
+    "mpay_choose_network": (
+        "{asset} hoạt động trên nhiều mạng. Hãy chọn đúng mạng mà ví của bạn dùng:\n\n"
+        "⚠️ Chuyển sai mạng thì không thể lấy lại tiền."
+    ),
+    "mpay_ask_hash": (
+        "Hãy gửi mã giao dịch (tx hash) của lần chuyển này.\n"
+        "Bạn có thể tìm nó trong lịch sử ví hoặc trên trình duyệt blockchain."
+    ),
+    "mpay_hash_invalid": (
+        "Đó không giống một mã giao dịch. Hãy gửi đầy đủ mã như ví của bạn hiển thị "
+        "(16–120 ký tự, không có dấu cách)."
+    ),
+    "mpay_hash_aborted": (
+        "Đã ngừng chờ mã giao dịch. Yêu cầu thanh toán của bạn vẫn còn mở — nếu bạn đã "
+        "chuyển tiền, hãy quay lại tin nhắn thanh toán và nhấn nút kiểm tra thanh toán một lần nữa."
+    ),
+    "mpay_hash_duplicate": (
+        "Mã giao dịch này đã được gửi trước đó. Nếu đây thực sự là một lần chuyển mới, "
+        "hãy liên hệ {support}."
+    ),
+    "mpay_submitted": (
+        "✅ Đã nhận yêu cầu #{payment_id}.\n"
+        "Quản trị viên sẽ kiểm tra giao dịch trên blockchain; số dư của bạn sẽ được cập nhật "
+        "sau khi xác nhận.\n"
+        "Nếu quá lâu, hãy liên hệ {support}."
+    ),
+    "mpay_confirmed": (
+        "✅ Đã xác nhận chuyển khoản #{payment_id}.\n"
+        "Đã cộng: {amount}\n"
+        "Số dư: {balance}"
+    ),
+    "mpay_rejected": (
+        "❌ Chuyển khoản #{payment_id} không được xác nhận.\n"
+        "Quản trị viên không tìm thấy nó trên blockchain, hoặc số tiền không khớp với yêu cầu. "
+        "Hãy liên hệ {support}."
+    ),
+    "mpay_cancelled": (
+        "Đã huỷ yêu cầu #{payment_id}. Nếu bạn đã chuyển tiền, hãy liên hệ {support}."
+    ),
+    "mpay_unavailable": (
+        "Hiện không thể thanh toán bằng cryptocurrency. Hãy dùng Crypto Pay hoặc liên hệ {support}."
+    ),
+    "mpay_stale": "Nút này không còn hiệu lực. Hãy bắt đầu nạp tiền lại.",
+    "mpay_open_exists": (
+        "Bạn đã có một yêu cầu đang mở #{payment_id}. Hãy hoàn tất hoặc huỷ nó trước."
+    ),
+    "mpay_admin_new": (
+        "🆕 Chuyển khoản crypto đang chờ xác nhận #{payment_id}\n\n"
+        "Người dùng: {user}\n"
+        "Đồng tiền / mạng: {asset} / {network}\n"
+        "Yêu cầu: {fiat_amount}\n"
+        "Dự kiến: {crypto_amount}\n"
+        "Địa chỉ: <code>{address}</code>\n"
+        "Mã giao dịch: <code>{tx_hash}</code>\n\n"
+        "Hãy kiểm tra mã giao dịch, số tiền và mạng trên trình duyệt blockchain trước khi xác nhận."
+    ),
+    "mpay_admin_confirmed": "✅ #{payment_id} đã xác nhận, {amount} đã được cộng cho {user}.",
+    "mpay_admin_rejected": "❌ #{payment_id} bị từ chối, không cộng gì cả.",
+    "mpay_admin_already": "#{payment_id} đã được một quản trị viên khác xử lý.",
+    "mpay_admin_none_pending": "Không có chuyển khoản crypto nào đang chờ xác nhận.",
+    "product_invoice": (
+        "Sản phẩm: {product}\n"
+        "Giá niêm yết: {amount}\n"
+        "Hoá đơn Crypto Pay: {usd_amount}\n\n"
+        "Nhấn nút bên dưới để thanh toán bằng crypto."
+    ),
+    "pay": "💳 Thanh toán",
+    "pay_balance": "💰 Trả bằng số dư",
+    "balance_insufficient": "Số dư không đủ. Vui lòng nạp tiền trước.",
+    "check_payment": "🔄 Kiểm tra thanh toán",
+    "payment_pending": "Thanh toán chưa được xác nhận. Hãy hoàn tất thanh toán rồi kiểm tra lại.",
+    "payment_expired": "Hoá đơn đã hết hạn. Vui lòng tạo đơn hàng mới.",
+    "payment_confirmed": "Đã xác nhận thanh toán. Sản phẩm của bạn sẽ được giao trong vài giây.",
+    "top_up_confirmed": "Đã xác nhận nạp tiền. Số dư của bạn sẽ được cập nhật trong vài giây.",
+    "product_out_of_stock": "Sản phẩm này tạm thời đã hết.",
+    "stock": (
+        "🔄 Tình trạng còn hàng:\n\n"
+        "ChatGPT Plus NW: {plus_nw}\n"
+        "ChatGPT Plus FW: {plus_fw}\n"
+        "GPT Pro/5x NW: {pro5_nw}\n"
+        "GPT Pro/20x NW: {pro20_nw}"
+    ),
+    "stock_list": "🔄 Tình trạng còn hàng:\n\n{items}",
+    "queue": (
+        "🕒 Xếp hàng\n\n"
+        "Bạn có thể đặt trước một tài khoản. Khi có hàng trở lại, hệ thống sẽ tự động giao cho bạn."
+    ),
+    "queue_choose_quantity": "Chọn số lượng:",
+    "queue_invoice": (
+        "🕒 Đơn đặt trước\n"
+        "Sản phẩm: {product}\n"
+        "Số lượng: {quantity}\n"
+        "Giá: {amount}\n"
+        "Hoá đơn Crypto Pay: {usd_amount}\n\n"
+        "Nhấn nút bên dưới để thanh toán. Khi có hàng trở lại, hệ thống sẽ tự động giao cho bạn."
+    ),
+    "queue_added": (
+        "✅ Đã thêm vào danh sách chờ: {product}\n"
+        "Chúng tôi sẽ tự động thông báo khi có hàng."
+    ),
+    "queue_already": "Bạn đã ở trong danh sách chờ cho: {product}.",
+    "queue_available": "🎉 Có hàng trở lại: {product}\nBạn có thể mua ngay.",
+    "no_stock_after_payment": (
+        "✅ Đã nhận thanh toán.\n\n"
+        "Sản phẩm này là đặt trước và sẽ được giao tự động trong {hours} giờ.\n"
+        "Bot sẽ gửi tài khoản ngay khi sẵn sàng — bạn không cần làm gì thêm.\n"
+        "Thắc mắc: {support}."
+    ),
+    "delivery_account": (
+        "✅ Đơn hàng hoàn tất\n"
+        "Sản phẩm: {product}\n\n"
+        "Sản phẩm số của bạn:\n<pre>{payload}</pre>\n\n"
+        "Không chia sẻ thông tin này với bất kỳ ai."
+    ),
+    "delivery_balance": "✅ Nạp tiền hoàn tất\nĐã thêm: {amount}\nSố dư hiện tại: {balance}",
+    "invite": "账号GPT Plus/Pro顶级品质\n\n🔗 Mời bạn bè vào bot:\n{link}",
+    "help": (
+        "📖 Trợ giúp\n\n"
+        "Hỗ trợ: {support}\n"
+        "Dùng các nút bên dưới để xem Điều khoản bán hàng và Chính sách bảo mật."
+    ),
+    "settings": "⚙️ Cài đặt\n\nThông báo mua hàng: {status}",
+    "notifications_on": " đang bật",
+    "notifications_off": " đang tắt",
+    "enable_notifications": "🔔 Bật thông báo mua hàng",
+    "disable_notifications": "🔕 Tắt thông báo mua hàng",
+    "notifications_updated": "Đã cập nhật cài đặt thông báo mua hàng.",
+    "purchase_notification": (
+        "🛍 <b>Đơn hàng mới</b>\n"
+        "━━━━━━━━━━━━\n"
+        "📦 {product}\n"
+        "🔢 {quantity} cái\n"
+        "💵 {price}\n"
+        "👤 {buyer}"
+    ),
+    "disable_purchase_notifications": "🔕 Tắt thông báo mua hàng",
+    "stock_replenished": (
+        "📦 <b>Hàng mới về</b>\n"
+        "━━━━━━━━━━━━\n"
+        "Cửa hàng vừa có thêm tài khoản mới.\n"
+        "Mở «Sản phẩm» để xem hàng còn."
+    ),
+    "catalog": "🛍 Sản phẩm",
+    "catalog_empty": "Hiện chưa có sản phẩm nào.",
+    "catalog_title": "🛍 Chọn một sản phẩm:",
+    "payment_error": "Không thể tạo hoá đơn. Hãy thử lại sau hoặc liên hệ {support}.",
+    "generic_error": "Có lỗi xảy ra. Vui lòng thử lại sau.",
+    "admin_only": "Lệnh này chỉ dành cho quản trị viên.",
+    "admin_good_added": "Đã thêm sản phẩm vào kho: {product}, ID {good_id}.",
+    "admin_add_usage": (
+        "Cách dùng: /add_good <gpt_plus_nw|gpt_plus_fw|pro_5x_nw|pro_20x_nw> <sản phẩm số>."
+    ),
+    "admin_stock": "Kho:\n{stock}",
+    "stock_empty": "Kho trống.",
+}
+
+_HI: dict[str, str] = {
+    "choose_language": "कृपया भाषा चुनें:",
+    "language_saved": "भाषा बदल दी गई।",
+    "welcome": "स्वागत है! कोई उत्पाद चुनें या मेन्यू खोलें।",
+    "unknown_command": "कृपया मेन्यू के बटनों में से किसी एक का उपयोग करें।",
+    "choose_pro_plan": "Pro प्लान चुनें:",
+    "choose_plus_plan": "Plus खाते का प्रकार चुनें:",
+    "balance": "💰 शेष राशि: {balance}\n\nआप Crypto Pay से पैसे जोड़ सकते हैं।",
+    "top_up": "💳 जोड़ने के लिए राशि चुनें:",
+    "top_up_other": "{currency} में जोड़ने के लिए राशि दर्ज करें:",
+    "top_up_invalid": "मान्य राशि दर्ज करें, उदाहरण के लिए {example}।",
+    "top_up_invoice": (
+        "राशि जोड़ने का इनवॉइस बन गया: {amount}\n"
+        "Crypto Pay इनवॉइस: {usd_amount}\n"
+        "भुगतान के लिए नीचे का बटन दबाएँ।\n"
+        "भुगतान के बाद आपकी शेष राशि अपने आप अपडेट हो जाएगी।"
+    ),
+    "mpay_method": (
+        "{amount} का भुगतान कैसे करना है, चुनें:\n\n"
+        "• Crypto Pay — राशि अपने आप जुड़ती है, सबसे तेज़।\n"
+        "• Cryptocurrency — सीधे हमारे वॉलेट में भेजें; एडमिन जाँचकर आपकी राशि जोड़ देगा।"
+    ),
+    "mpay_choose_asset": "सिक्का चुनें (राशि: {amount}):",
+    "mpay_choose_network": (
+        "{asset} कई नेटवर्क पर चलता है। वही चुनें जो आपका वॉलेट वाकई इस्तेमाल करता है:\n\n"
+        "⚠️ गलत नेटवर्क पर भेजी गई राशि वापस नहीं मिल सकती।"
+    ),
+    "mpay_ask_hash": (
+        "इस ट्रांसफ़र का ट्रांज़ैक्शन हैश भेजें।\n"
+        "यह आपके वॉलेट के इतिहास या ब्लॉक एक्सप्लोरर में मिलेगा।"
+    ),
+    "mpay_hash_invalid": (
+        "यह ट्रांज़ैक्शन हैश जैसा नहीं लगता। जैसा आपका वॉलेट दिखाता है, पूरा हैश भेजें "
+        "(16–120 अक्षर, बिना स्पेस)।"
+    ),
+    "mpay_hash_aborted": (
+        "हैश का इंतज़ार बंद कर दिया गया। आपका भुगतान अनुरोध अभी भी खुला है — अगर आपने पैसे भेज "
+        "दिए हैं, तो भुगतान संदेश पर वापस जाकर फिर से भुगतान जाँचने का बटन दबाएँ।"
+    ),
+    "mpay_hash_duplicate": (
+        "यह ट्रांज़ैक्शन हैश पहले ही भेजा जा चुका है। अगर यह सचमुच नया ट्रांसफ़र है, तो "
+        "{support} से संपर्क करें।"
+    ),
+    "mpay_submitted": (
+        "✅ अनुरोध #{payment_id} मिल गया।\n"
+        "एडमिन ब्लॉक एक्सप्लोरर पर ट्रांज़ैक्शन जाँचेगा; पुष्टि होने पर शेष राशि अपडेट हो जाएगी।\n"
+        "अगर बहुत देर लगे तो {support} से संपर्क करें।"
+    ),
+    "mpay_confirmed": (
+        "✅ ट्रांसफ़र #{payment_id} की पुष्टि हो गई।\n"
+        "जोड़ा गया: {amount}\n"
+        "शेष राशि: {balance}"
+    ),
+    "mpay_rejected": (
+        "❌ ट्रांसफ़र #{payment_id} की पुष्टि नहीं हुई।\n"
+        "एडमिन को यह ब्लॉकचेन पर नहीं मिला, या राशि अनुरोध से मेल नहीं खाई। "
+        "{support} से संपर्क करें।"
+    ),
+    "mpay_cancelled": (
+        "अनुरोध #{payment_id} रद्द कर दिया गया। अगर आपने पैसे भेज दिए हैं तो {support} से संपर्क करें।"
+    ),
+    "mpay_unavailable": (
+        "अभी cryptocurrency से भुगतान उपलब्ध नहीं है। Crypto Pay का उपयोग करें या "
+        "{support} से संपर्क करें।"
+    ),
+    "mpay_stale": "यह बटन अब मान्य नहीं है। राशि जोड़ना फिर से शुरू करें।",
+    "mpay_open_exists": (
+        "आपका एक अनुरोध #{payment_id} पहले से खुला है। पहले उसे पूरा करें या रद्द करें।"
+    ),
+    "mpay_admin_new": (
+        "🆕 पुष्टि के लिए प्रतीक्षारत crypto ट्रांसफ़र #{payment_id}\n\n"
+        "उपयोगकर्ता: {user}\n"
+        "सिक्का / नेटवर्क: {asset} / {network}\n"
+        "अनुरोधित: {fiat_amount}\n"
+        "अपेक्षित: {crypto_amount}\n"
+        "पता: <code>{address}</code>\n"
+        "Tx हैश: <code>{tx_hash}</code>\n\n"
+        "पुष्टि से पहले हैश, राशि और नेटवर्क ब्लॉक एक्सप्लोरर पर जाँच लें।"
+    ),
+    "mpay_admin_confirmed": "✅ #{payment_id} की पुष्टि हुई, {user} को {amount} जोड़ा गया।",
+    "mpay_admin_rejected": "❌ #{payment_id} अस्वीकृत, कुछ भी नहीं जोड़ा गया।",
+    "mpay_admin_already": "#{payment_id} को किसी दूसरे एडमिन ने पहले ही निपटा दिया है।",
+    "mpay_admin_none_pending": "पुष्टि के लिए कोई crypto ट्रांसफ़र प्रतीक्षारत नहीं है।",
+    "product_invoice": (
+        "उत्पाद: {product}\n"
+        "प्रदर्शित कीमत: {amount}\n"
+        "Crypto Pay इनवॉइस: {usd_amount}\n\n"
+        "crypto से भुगतान के लिए नीचे का बटन दबाएँ।"
+    ),
+    "pay": "💳 भुगतान करें",
+    "pay_balance": "💰 शेष राशि से भुगतान करें",
+    "balance_insufficient": "शेष राशि पर्याप्त नहीं है। कृपया पहले राशि जोड़ें।",
+    "check_payment": "🔄 भुगतान जाँचें",
+    "payment_pending": "भुगतान की पुष्टि अभी नहीं हुई। भुगतान पूरा करें और फिर जाँचें।",
+    "payment_expired": "इनवॉइस की अवधि समाप्त हो गई। कृपया नया ऑर्डर बनाएँ।",
+    "payment_confirmed": "भुगतान की पुष्टि हो गई। आपका सामान कुछ सेकंड में दे दिया जाएगा।",
+    "top_up_confirmed": "राशि जोड़ने की पुष्टि हो गई। आपकी शेष राशि कुछ सेकंड में अपडेट हो जाएगी।",
+    "product_out_of_stock": "यह उत्पाद अस्थायी रूप से उपलब्ध नहीं है।",
+    "stock": (
+        "🔄 उपलब्धता:\n\n"
+        "ChatGPT Plus NW: {plus_nw}\n"
+        "ChatGPT Plus FW: {plus_fw}\n"
+        "GPT Pro/5x NW: {pro5_nw}\n"
+        "GPT Pro/20x NW: {pro20_nw}"
+    ),
+    "stock_list": "🔄 उपलब्धता:\n\n{items}",
+    "queue": (
+        "🕒 प्रतीक्षा सूची\n\n"
+        "आप खाता पहले से बुक कर सकते हैं। जैसे ही स्टॉक आएगा, सिस्टम अपने आप आपको दे देगा।"
+    ),
+    "queue_choose_quantity": "मात्रा चुनें:",
+    "queue_invoice": (
+        "🕒 प्रतीक्षा सूची का ऑर्डर\n"
+        "उत्पाद: {product}\n"
+        "मात्रा: {quantity}\n"
+        "कीमत: {amount}\n"
+        "Crypto Pay इनवॉइस: {usd_amount}\n\n"
+        "भुगतान के लिए नीचे का बटन दबाएँ। स्टॉक आने पर सिस्टम अपने आप आपको दे देगा।"
+    ),
+    "queue_added": (
+        "✅ प्रतीक्षा सूची में जोड़ा गया: {product}\n"
+        "उपलब्ध होने पर हम आपको अपने आप सूचित करेंगे।"
+    ),
+    "queue_already": "आप पहले से ही इसकी प्रतीक्षा सूची में हैं: {product}।",
+    "queue_available": "🎉 फिर से उपलब्ध: {product}\nआप अभी खरीद सकते हैं।",
+    "no_stock_after_payment": (
+        "✅ भुगतान प्राप्त हो गया।\n\n"
+        "यह उत्पाद प्री-ऑर्डर पर है और {hours} घंटे के भीतर स्वचालित रूप से डिलीवर होगा।\n"
+        "खाता तैयार होते ही बॉट उसे भेज देगा — आपको कुछ नहीं करना है।\n"
+        "प्रश्न: {support}।"
+    ),
+    "delivery_account": (
+        "✅ ऑर्डर पूरा हुआ\n"
+        "उत्पाद: {product}\n\n"
+        "आपका डिजिटल सामान:\n<pre>{payload}</pre>\n\n"
+        "यह जानकारी किसी के साथ साझा न करें।"
+    ),
+    "delivery_balance": "✅ राशि जुड़ गई\nजोड़ा गया: {amount}\nवर्तमान शेष राशि: {balance}",
+    "invite": "账号GPT Plus/Pro顶级品质\n\n🔗 दोस्तों को बॉट में बुलाएँ:\n{link}",
+    "help": (
+        "📖 सहायता\n\n"
+        "सहायता: {support}\n"
+        "बिक्री की शर्तें और गोपनीयता नीति देखने के लिए नीचे के बटनों का उपयोग करें।"
+    ),
+    "settings": "⚙️ सेटिंग्स\n\nखरीद सूचनाएँ: {status}",
+    "notifications_on": " चालू",
+    "notifications_off": " बंद",
+    "enable_notifications": "🔔 खरीद सूचनाएँ चालू करें",
+    "disable_notifications": "🔕 खरीद सूचनाएँ बंद करें",
+    "notifications_updated": "खरीद सूचनाओं की सेटिंग अपडेट हो गई।",
+    "purchase_notification": (
+        "🛍 <b>नई खरीद</b>\n"
+        "━━━━━━━━━━━━\n"
+        "📦 {product}\n"
+        "🔢 {quantity} नग\n"
+        "💵 {price}\n"
+        "👤 {buyer}"
+    ),
+    "disable_purchase_notifications": "🔕 खरीद सूचनाएँ बंद करें",
+    "stock_replenished": (
+        "📦 <b>नया स्टॉक</b>\n"
+        "━━━━━━━━━━━━\n"
+        "दुकान में नए खाते आ गए हैं।\n"
+        "उपलब्धता देखने के लिए «उत्पाद» खोलें।"
+    ),
+    "catalog": "🛍 उत्पाद",
+    "catalog_empty": "अभी कोई उत्पाद उपलब्ध नहीं है।",
+    "catalog_title": "🛍 कोई उत्पाद चुनें:",
+    "payment_error": "इनवॉइस नहीं बन सका। बाद में फिर कोशिश करें या {support} से संपर्क करें।",
+    "generic_error": "कुछ गड़बड़ हो गई। कृपया बाद में फिर कोशिश करें।",
+    "admin_only": "यह कमांड केवल एडमिन के लिए है।",
+    "admin_good_added": "स्टॉक में जोड़ा गया: {product}, ID {good_id}।",
+    "admin_add_usage": (
+        "उपयोग: /add_good <gpt_plus_nw|gpt_plus_fw|pro_5x_nw|pro_20x_nw> <डिजिटल सामान>।"
+    ),
+    "admin_stock": "स्टॉक:\n{stock}",
+    "stock_empty": "स्टॉक खाली है।",
+}
+
+for _code, _table in (("vi", _VI), ("hi", _HI)):
+    for _key, _value in _table.items():
+        TEXTS[_key][_code] = _value
+
+_missing = {
+    code: sorted(key for key, row in TEXTS.items() if code not in row)
+    for code in LANGUAGES
+}
+_missing = {code: keys for code, keys in _missing.items() if keys}
+if _missing:
+    raise RuntimeError(f"i18n is missing translations: {_missing}")
+
+
 MENU_LABELS: dict[str, dict[str, str]] = {
     "zh": {
         "plus": "⚡GPT Plus",
@@ -517,12 +999,37 @@ MENU_LABELS: dict[str, dict[str, str]] = {
         "settings": "⚙️Настройки",
         "language": "🌐Язык",
     },
+    "vi": {
+        "plus": "⚡GPT Plus",
+        "pro": "🚀 Pro",
+        "balance": "💰Số dư",
+        "invite": "🔗Mời bạn",
+        "stock": "🔄Kiểm tra hàng",
+        "queue": "🕒Xếp hàng",
+        "catalog": "🛍Sản phẩm",
+        "help": "📖Trợ giúp",
+        "settings": "⚙️Cài đặt",
+        "language": "🌐Ngôn ngữ",
+    },
+    "hi": {
+        "plus": "⚡GPT Plus",
+        "pro": "🚀 Pro",
+        "balance": "💰शेष राशि",
+        "invite": "🔗आमंत्रित करें",
+        "stock": "🔄स्टॉक देखें",
+        "queue": "🕒प्रतीक्षा सूची",
+        "catalog": "🛍उत्पाद",
+        "help": "📖सहायता",
+        "settings": "⚙️सेटिंग्स",
+        "language": "🌐भाषा",
+    },
 }
 
 
 def t(language: str | None, key: str, **kwargs: object) -> str:
     language = language if language in LANGUAGES else "en"
-    template = TEXTS[key][language]
+    row = TEXTS[key]
+    template = row.get(language) or row["en"]
     return template.format(**kwargs)
 
 
@@ -556,11 +1063,16 @@ def help_keyboard(
     privacy_url: str,
 ) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    labels = {
-        "zh": {"offer": "📄 销售条款", "privacy": "🔒 隐私政策"},
-        "en": {"offer": "📄 Terms of Sale", "privacy": "🔒 Privacy Policy"},
-        "ru": {"offer": "📄 Оферта", "privacy": "🔒 Политика конфиденциальности"},
-    }[language]
+    labels = _pick(
+        {
+            "zh": {"offer": "📄 销售条款", "privacy": "🔒 隐私政策"},
+            "en": {"offer": "📄 Terms of Sale", "privacy": "🔒 Privacy Policy"},
+            "ru": {"offer": "📄 Оферта", "privacy": "🔒 Политика конфиденциальности"},
+            "vi": {"offer": "📄 Điều khoản bán hàng", "privacy": "🔒 Chính sách bảo mật"},
+            "hi": {"offer": "📄 बिक्री की शर्तें", "privacy": "🔒 गोपनीयता नीति"},
+        },
+        language,
+    )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="@admingpt", url=support_url)],
@@ -575,13 +1087,15 @@ def balance_keyboard(language: str) -> InlineKeyboardMarkup:
         "zh": "💳 充值",
         "en": "💳 Top up",
         "ru": "💳 Пополнить",
+        "vi": "💳 Nạp tiền",
+        "hi": "💳 राशि जोड़ें",
     }
     language = language if language in LANGUAGES else "en"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=labels[language],
+                    text=_pick(labels, language),
                     callback_data="topup",
                     style=ButtonStyle.SUCCESS,
                 )
@@ -595,14 +1109,25 @@ def top_up_keyboard(language: str, amount_labels: dict[int, str] | None = None) 
         "zh": "充值 {amount}",
         "en": "Top up {amount}",
         "ru": "Пополнить {amount}",
+        "vi": "Nạp {amount}",
+        "hi": "{amount} जोड़ें",
     }
-    other_labels = {"zh": "其他", "en": "Other", "ru": "Другая сумма"}
+    other_labels = {
+        "zh": "其他",
+        "en": "Other",
+        "ru": "Другая сумма",
+        "vi": "Số khác",
+        "hi": "अन्य राशि",
+    }
     language = language if language in LANGUAGES else "en"
+    template = _pick(labels, language)
+    # The caller supplies the labels already converted into the buyer's own
+    # currency; the USD fallback only shows up if it forgot to.
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=labels[language].format(
+                    text=template.format(
                         amount=(amount_labels or {}).get(amount, f"${amount:.2f}")
                     ),
                     callback_data=f"topup:{amount * 100}",
@@ -611,13 +1136,13 @@ def top_up_keyboard(language: str, amount_labels: dict[int, str] | None = None) 
             ],
             [
                 InlineKeyboardButton(
-                    text=labels[language].format(
+                    text=template.format(
                         amount=(amount_labels or {}).get(10, "$10.00")
                     ),
                     callback_data="topup:1000",
                 ),
                 InlineKeyboardButton(
-                    text=other_labels[language],
+                    text=_pick(other_labels, language),
                     callback_data="topup:other",
                 )
             ],
@@ -658,11 +1183,8 @@ def plus_keyboard(
     stock: dict[str, int] | None = None,
 ) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    labels = {
-        "zh": {"nw": "⚡ Plus NW", "fw": "⚡ Plus FW"},
-        "en": {"nw": "⚡ Plus NW", "fw": "⚡ Plus FW"},
-        "ru": {"nw": "⚡ Plus NW", "fw": "⚡ Plus FW"},
-    }[language]
+    # Product names, so they read the same in every language.
+    labels = {"nw": "⚡ Plus NW", "fw": "⚡ Plus FW"}
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -687,11 +1209,8 @@ def pro_keyboard(
     stock: dict[str, int] | None = None,
 ) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    labels = {
-        "zh": {"5": "🚀 Pro 5x NW", "20": "🚀 Pro 20x NW"},
-        "en": {"5": "🚀 Pro 5x NW", "20": "🚀 Pro 20x NW"},
-        "ru": {"5": "🚀 Pro 5x NW", "20": "🚀 Pro 20x NW"},
-    }[language]
+    # Product names, so they read the same in every language.
+    labels = {"5": "🚀 Pro 5x NW", "20": "🚀 Pro 20x NW"}
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -716,26 +1235,13 @@ def queue_keyboard(
     stock: dict[str, int] | None = None,
 ) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
+    # Product names, so they read the same in every language.
     labels = {
-        "zh": {
-            "plus_nw": "ChatGPT Plus NW",
-            "plus_fw": "ChatGPT Plus FW",
-            "pro5_nw": "GPT Pro/5x NW",
-            "pro20_nw": "GPT Pro/20x NW",
-        },
-        "en": {
-            "plus_nw": "ChatGPT Plus NW",
-            "plus_fw": "ChatGPT Plus FW",
-            "pro5_nw": "GPT Pro/5x NW",
-            "pro20_nw": "GPT Pro/20x NW",
-        },
-        "ru": {
-            "plus_nw": "ChatGPT Plus NW",
-            "plus_fw": "ChatGPT Plus FW",
-            "pro5_nw": "GPT Pro/5x NW",
-            "pro20_nw": "GPT Pro/20x NW",
-        },
-    }[language]
+        "plus_nw": "ChatGPT Plus NW",
+        "plus_fw": "ChatGPT Plus FW",
+        "pro5_nw": "GPT Pro/5x NW",
+        "pro20_nw": "GPT Pro/20x NW",
+    }
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -842,20 +1348,27 @@ def queue_purchase_keyboard(language: str, product_key: str) -> InlineKeyboardMa
 
 def queue_quantity_keyboard(language: str, product_key: str) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    labels = {"zh": "数量 {quantity}", "en": "Quantity {quantity}", "ru": "Количество {quantity}"}
+    labels = {
+        "zh": "数量 {quantity}",
+        "en": "Quantity {quantity}",
+        "ru": "Количество {quantity}",
+        "vi": "Số lượng {quantity}",
+        "hi": "मात्रा {quantity}",
+    }
+    template = _pick(labels, language)
     quantities = (1, 2, 3, 5)
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=labels[language].format(quantity=quantity),
+                    text=template.format(quantity=quantity),
                     callback_data=f"queue_qty:{product_key}:{quantity}",
                 )
                 for quantity in quantities[:2]
             ],
             [
                 InlineKeyboardButton(
-                    text=labels[language].format(quantity=quantity),
+                    text=template.format(quantity=quantity),
                     callback_data=f"queue_qty:{product_key}:{quantity}",
                 )
                 for quantity in quantities[2:]
@@ -899,12 +1412,18 @@ def queue_payment_keyboard(
 
 def queue_button_keyboard(language: str, product_key: str) -> InlineKeyboardMarkup:
     language = language if language in LANGUAGES else "en"
-    labels = {"zh": "🕒 加入排队", "en": "🕒 Join queue", "ru": "🕒 В очередь"}
+    labels = {
+        "zh": "🕒 加入排队",
+        "en": "🕒 Join queue",
+        "ru": "🕒 В очередь",
+        "vi": "🕒 Vào danh sách chờ",
+        "hi": "🕒 प्रतीक्षा सूची में",
+    }
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=labels[language],
+                    text=_pick(labels, language),
                     callback_data=f"queue:{product_key}",
                     style=ButtonStyle.PRIMARY,
                 )
@@ -948,11 +1467,13 @@ def payment_keyboard(
             "zh": "🛒 购买多个",
             "en": "🛒 Buy several",
             "ru": "🛒 Купить несколько",
+            "vi": "🛒 Mua nhiều",
+            "hi": "🛒 कई खरीदें",
         }
         rows.append(
             [
                 InlineKeyboardButton(
-                    text=buy_many_labels[language],
+                    text=_pick(buy_many_labels, language),
                     callback_data=f"buy_many:{product_key}",
                 )
             ]
@@ -971,24 +1492,24 @@ def payment_method_keyboard(language: str, amount_cents: int) -> InlineKeyboardM
         "zh": "⚡ Crypto Pay（自动）",
         "en": "⚡ Crypto Pay (automatic)",
         "ru": "⚡ Crypto Pay (автоматически)",
+        "vi": "⚡ Crypto Pay (tự động)",
+        "hi": "⚡ Crypto Pay (स्वचालित)",
     }
-    manual = {
-        "zh": "🪙 加密货币转账",
-        "en": "🪙 Crypto transfer",
-        "ru": "🪙 Перевод криптовалютой",
-    }
+    # Left untranslated on purpose: the owner wants the same wording in every
+    # language, the way the coin tickers are the same everywhere.
+    manual = "🪙 Cryptocurrency"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=auto[language],
+                    text=_pick(auto, language),
                     callback_data=f"cpay:{amount_cents}",
                     style=ButtonStyle.SUCCESS,
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=manual[language],
+                    text=manual,
                     callback_data=f"mpay:assets:{amount_cents}",
                     style=ButtonStyle.PRIMARY,
                 )
@@ -1017,9 +1538,15 @@ def mpay_asset_keyboard(
             row = []
     if row:
         rows.append(row)
-    back = {"zh": "◀️ 返回", "en": "◀️ Back", "ru": "◀️ Назад"}
+    back = {
+        "zh": "◀️ 返回",
+        "en": "◀️ Back",
+        "ru": "◀️ Назад",
+        "vi": "◀️ Quay lại",
+        "hi": "◀️ वापस",
+    }
     rows.append(
-        [InlineKeyboardButton(text=back[language], callback_data=f"topup:{amount_cents}")]
+        [InlineKeyboardButton(text=_pick(back, language), callback_data=f"topup:{amount_cents}")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -1041,33 +1568,54 @@ def mpay_network_keyboard(
         ]
         for index, network in options
     ]
-    back = {"zh": "◀️ 返回", "en": "◀️ Back", "ru": "◀️ Назад"}
+    back = {
+        "zh": "◀️ 返回",
+        "en": "◀️ Back",
+        "ru": "◀️ Назад",
+        "vi": "◀️ Quay lại",
+        "hi": "◀️ वापस",
+    }
     rows.append(
-        [InlineKeyboardButton(text=back[language], callback_data=f"mpay:assets:{amount_cents}")]
+        [InlineKeyboardButton(text=_pick(back, language), callback_data=f"mpay:assets:{amount_cents}")]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def mpay_pending_keyboard(language: str, payment_id: int) -> InlineKeyboardMarkup:
+    """Buttons under a transfer request.
+
+    The primary button reads "check payment" and routes to ``mpay:check:``,
+    which hands the request to the admins without asking the buyer for a
+    transaction hash. ``mpay:hash:`` still exists for buyers who want to supply
+    one, but nothing in the UI demands it any more.
+    """
     language = language if language in LANGUAGES else "en"
-    sent = {
-        "zh": "✅ 我已转账，提交哈希",
-        "en": "✅ I have sent it — submit hash",
-        "ru": "✅ Перевёл — отправить хеш",
+    check = {
+        "zh": "🔄 检查支付",
+        "en": "🔄 Check payment",
+        "ru": "🔄 Проверить оплату",
+        "vi": "🔄 Kiểm tra thanh toán",
+        "hi": "🔄 भुगतान जाँचें",
     }
-    cancel = {"zh": "✖️ 取消", "en": "✖️ Cancel", "ru": "✖️ Отменить"}
+    cancel = {
+        "zh": "✖️ 取消",
+        "en": "✖️ Cancel",
+        "ru": "✖️ Отменить",
+        "vi": "✖️ Huỷ",
+        "hi": "✖️ रद्द करें",
+    }
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=sent[language],
-                    callback_data=f"mpay:hash:{payment_id}",
+                    text=_pick(check, language),
+                    callback_data=f"mpay:check:{payment_id}",
                     style=ButtonStyle.SUCCESS,
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text=cancel[language],
+                    text=_pick(cancel, language),
                     callback_data=f"mpay:cancel:{payment_id}",
                     style=ButtonStyle.DANGER,
                 )
